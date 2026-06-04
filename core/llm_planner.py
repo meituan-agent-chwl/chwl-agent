@@ -105,6 +105,11 @@ ITINERARY_GENERATION_SYSTEM = """你是一个行程编排师。
 你必须 ONLY 使用下面提供的候选 POI 中的 ID。严禁编造不在候选列表中的 POI。
 每个节点的 poi_id 必须能从候选列表中匹配到。如果候选列表中没有合适的 POI，就返回空的 nodes 数组。
 
+【结构要求】
+生成的 nodes 必须包含至少 1 个 restaurant 类型的节点。
+不允许生成没有餐厅的方案。
+推荐结构：1 个 main_activity + 1 个 restaurant + 1 个 optional_activity。
+
 输出 JSON 格式：
 {
     "summary": "一句话行程总结",

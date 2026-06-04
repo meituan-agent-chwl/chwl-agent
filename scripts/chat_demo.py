@@ -68,8 +68,6 @@ class ChatAgent:
         self.llm = LLMClient(api_key=API_KEY)
         self.planner = LLMPlanner(self.llm)
         self.session_id = ""
-        self._phase1_task: asyncio.Task | None = None
-        self._phase2_task: asyncio.Task | None = None
 
         self.event_bus = EventBus()
         self.orchestrator = self._build(use_teammate)
@@ -164,11 +162,15 @@ class ChatAgent:
         if not self.session_id:
             return "系统还没准备好"
 
+        # 保存用户输入到对话历史
+        self.conversation_history.append({"role": "user", "content": user_input})
+
         # 取消
         if any(k in user_input for k in ("取消", "不去了", "算了", "再见")):
-            self._cancel_tasks()
             await self.orchestrator.cancel_session(self.session_id)
-            return "好的，已取消。下次需要随时找我。"
+            reply = "好的，已取消。下次需要随时找我。"
+            self.conversation_history.append({"role": "assistant", "content": reply})
+            return reply
 
         # 获取状态
         status = await self.orchestrator.get_status(self.session_id)
@@ -201,28 +203,42 @@ class ChatAgent:
 
         # ── COMPLETED：履约完成 ──
         elif state == "completed":
-            if any(k in user_input for k in ("累", "困", "改")):
+            # 取消
+            if any(k in user_input for k in ("取消", "不去了", "算了")):
+                await self.orchestrator.cancel_session(self.session_id)
+                return "好的，已取消"
+            # 新偏好 → 重新规划
+            if any(k in user_input for k in ("减肥", "清淡", "换", "改", "累", "困")):
                 sentiment = UserSentiment(type="tired", description=user_input)
                 await self.orchestrator.handle_user_sentiment(self.session_id, sentiment)
                 return "好的，我调整一下。"
-            return "全部预约好了！您按计划出发就行，路上遇到问题随时找我。"
+            # 查看方案
+            if any(k in user_input for k in ("看看", "方案", "什么")):
+                return self._show_plan(status.nodes, status.summary)
+            # 默认走 LLM 回复
+            s = await self.orchestrator.get_status(self.session_id)
+            return await self.planner.generate_response(
+                {"phase": "completed", "nodes": s.nodes, "summary": s.summary}, user_input
+            )
 
         # ── NEEDS_REPLAN ──
         elif state == "needs_replan":
-            if any(k in user_input for k in ("好", "确认", "行", "换")):
-                self._cancel_tasks()
-                await self.orchestrator.cancel_session(self.session_id)
-                return await self._do_plan(user_input)
-            return "当前行程需要调整，您想怎么改？"
+            if any(k in user_input for k in ("好", "确认", "行", "换", "看看")):
+                # 回到 pending_confirm 让用户重新确认
+                s = await self.orchestrator.get_status(self.session_id)
+                return self._show_plan(s.nodes, s.summary) + "\n您看这样可以吗？输入「确认」继续。"
+            return "行程需要调整。输入「看看」查看调整方案，或输入新的需求重新规划。"
 
-        return "您说，我听着。"
+        # ── 兜底 ──
+        return await self.planner.generate_response(
+            {"phase": "unknown", "state": state, "nodes": status.nodes}, user_input
+        )
 
     # ── 核心操作 ──
 
     async def _do_plan(self, user_input: str) -> str:
         """启动新规划，等待完成"""
         # 取消旧任务 + 旧会话
-        self._cancel_tasks()
         if self.session_id:
             try:
                 await self.orchestrator.cancel_session(self.session_id)
@@ -247,19 +263,17 @@ class ChatAgent:
             return "规划超时，请重试"
 
         if status.itinerary_state == "pending_confirm" and status.nodes:
-            # LLM 生成回复
-            reply = await self.planner.generate_response(
-                {"phase": "plan_complete", "nodes": status.nodes,
-                 "summary": status.summary},
-                user_input,
-            )
+            # LLM 生成回复（携带对话历史）
+            context = {"phase": "plan_complete", "nodes": status.nodes, "summary": status.summary}
+            if self.conversation_history:
+                context["conversation_history"] = self.conversation_history[-6:]  # 最近 3 轮
+            reply = await self.planner.generate_response(context, user_input)
             return reply
         return "我看看周边有什么合适的..."
 
     async def _do_replan(self, user_input: str) -> str:
         """用户更新偏好 → 重新规划"""
         sp(f"\n[重新规划] 根据您的反馈调整方案...")
-        self._cancel_tasks()
         try:
             await self.orchestrator.cancel_session(self.session_id)
         except Exception:
@@ -290,15 +304,6 @@ class ChatAgent:
         lines.append("您看可以吗？")
         return "\n".join(lines)
 
-    def _cancel_tasks(self):
-        """取消所有后台任务，避免 cancelled 态冲突"""
-        for t in [self._phase1_task, self._phase2_task]:
-            if t and not t.done():
-                t.cancel()
-        self._phase1_task = None
-        self._phase2_task = None
-
-
 def main():
     use_teammate = "--teammate" in sys.argv
 
@@ -321,6 +326,7 @@ def main():
                 break
             sp("")
             response = loop.run_until_complete(agent.handle_message(user_input))
+            agent.conversation_history.append({"role": "assistant", "content": response})
             sp(f"\n[Agent] {response}\n")
     except (KeyboardInterrupt, EOFError):
         sp("\n[Agent] 再见！")
