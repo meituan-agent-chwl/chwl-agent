@@ -176,7 +176,7 @@ class ChatAgent:
             self.conversation_history.append({"role": "assistant", "content": reply})
             return reply
 
-        # 首次输入 → 创建 session
+        # 首次输入 → 创建 session（不主动规划，等 LLM 决定 action）
         if not self.session_id:
             self.session_id = await self.orchestrator.start_session(user_input)
 
@@ -238,13 +238,27 @@ class ChatAgent:
     # ── 操作 ──
 
     async def _do_plan(self, user_input: str) -> str:
+        # 检查是否已经在规划中（Phase 1 已在后台跑）
+        already_running = False
         if self.session_id:
             try:
-                await self.orchestrator.cancel_session(self.session_id)
+                s = await self.orchestrator.get_status(self.session_id)
+                if s.itinerary_state == "draft":
+                    already_running = True
             except Exception:
                 pass
-            await asyncio.sleep(0.3)
-        self.session_id = await self.orchestrator.start_session(user_input)
+
+        if not already_running:
+            # 只有没在规划时才取消重建
+            if self.session_id:
+                try:
+                    await self.orchestrator.cancel_session(self.session_id)
+                except Exception:
+                    pass
+                await asyncio.sleep(0.3)
+            self.session_id = await self.orchestrator.start_session(user_input)
+
+        # 等 Phase 1 完成
         for _ in range(40):
             await asyncio.sleep(1)
             s = await self.orchestrator.get_status(self.session_id)
