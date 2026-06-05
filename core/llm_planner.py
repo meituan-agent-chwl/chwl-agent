@@ -105,10 +105,9 @@ ITINERARY_GENERATION_SYSTEM = """你是一个行程编排师。
 你必须 ONLY 使用下面提供的候选 POI 中的 ID。严禁编造不在候选列表中的 POI。
 每个节点的 poi_id 必须能从候选列表中匹配到。如果候选列表中没有合适的 POI，就返回空的 nodes 数组。
 
-【结构要求】
-生成的 nodes 必须包含至少 1 个 restaurant 类型的节点。
-不允许生成没有餐厅的方案。
-推荐结构：1 个 main_activity + 1 个 restaurant + 1 个 optional_activity。
+【结构要求——绝对约束】
+生成的 nodes 必须包含 3 个节点，类型分别为：main_activity、restaurant、optional_activity。
+缺少任何一类节点则整体方案无效。必须从 valid_poi_ids 中选取对应的 ID。
 
 输出 JSON 格式：
 {
@@ -300,6 +299,23 @@ class LLMPlanner:
             if len(validated_nodes) < 2 and strict_fail:
                 logger.warning("[LLMPlanner] 严格过滤后节点不足，降级为仅 ID 校验")
                 validated_nodes = [n for n in raw_nodes if n.get("poi_id") in valid_poi_ids]
+
+            # 确保有 restaurant 节点。如 LLM 未生成，从 selected 中补入
+            has_restaurant = any(n.get("category") == "restaurant" for n in validated_nodes)
+            if not has_restaurant:
+                rest_data = selected.get("restaurant", {})
+                if rest_data:
+                    logger.warning("[LLMPlanner] LLM 未生成餐厅节点，自动补入")
+                    validated_nodes.append({
+                        "node_id": f"node_{len(validated_nodes)+1:03d}",
+                        "poi_id": rest_data.get("poi_id", ""),
+                        "poi_name": rest_data.get("name", "餐厅"),
+                        "category": "restaurant",
+                        "start_time": "",
+                        "end_time": "",
+                        "duration_min": 60,
+                        "tags": [],
+                    })
 
             import uuid
             return {"success": True, "data": {
