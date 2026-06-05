@@ -258,12 +258,15 @@ class LLMPlanner:
         departure = payload.get("departure_time", "14:00")
         scene = payload.get("scene", "family")
 
-        # 收集所有合法的 POI ID
+        # 收集所有合法的 POI ID + 类别映射
         valid_poi_ids = set()
+        poi_category_map = {}  # poi_id → expected category
         for key in ("main_activity", "restaurant", "optional_activity"):
             node = selected.get(key, {})
             if isinstance(node, dict) and node.get("poi_id"):
-                valid_poi_ids.add(node["poi_id"])
+                pid = node["poi_id"]
+                valid_poi_ids.add(pid)
+                poi_category_map[pid] = key  # main_activity → "main_activity"
 
         try:
             result = await self.llm.chat_json(
@@ -277,15 +280,22 @@ class LLMPlanner:
                     "optional_activity": selected.get("optional_activity", {}),
                 }, ensure_ascii=False)}],
             )
-            # POI 合法性校验：过滤掉 LLM 编造的节点
+            # POI 合法性校验：过滤 LLM 编造的节点 + 类别不匹配的节点
             validated_nodes = []
             for node in result.get("nodes", []):
                 poi_id = node.get("poi_id", "")
-                if poi_id in valid_poi_ids:
-                    validated_nodes.append(node)
-                else:
-                    logger.warning("[LLMPlanner] 过滤编造 POI: %s (%s)",
-                                   node.get("poi_name", ""), poi_id)
+                category = node.get("category", "")
+                node_name = node.get("poi_name", "")
+                if poi_id not in valid_poi_ids:
+                    logger.warning("[LLMPlanner] 过滤编造 POI: %s (%s)", node_name, poi_id)
+                    continue
+                # 类别匹配校验：活动 POI 不能当餐厅用
+                expected_cat = poi_category_map.get(poi_id, "")
+                if expected_cat and category and expected_cat != category:
+                    logger.warning("[LLMPlanner] 过滤类别不匹配: %s 期望=%s 实际=%s",
+                                   node_name, expected_cat, category)
+                    continue
+                validated_nodes.append(node)
 
             import uuid
             return {"success": True, "data": {

@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -64,18 +65,21 @@ class ChatAgent:
     3. 偏好更新触发重新规划
     """
 
-    CLARIFY_QUESTIONS = {
-        "start_time": "大概几点出发？比如下午2点",
-        "child_info": "有小朋友吗？几岁了",
-        "elderly_info": "有老人一起吗",
-    }
+    CLARIFY_QUESTIONS = [
+        ("start_time", "大概几点出发？比如下午2点"),
+        ("companions", "几个人去？有小朋友或者老人一起吗"),
+    ]
+
+    COMPANION_KEYWORDS = ["孩子", "小孩", "儿童", "宝宝", "婴儿", "老人", "父母", "爸妈",
+                          "老婆", "老公", "朋友", "闺蜜", "兄弟", "同学", "同事"]
 
     def __init__(self, use_teammate: bool = False):
         self.llm = LLMClient(api_key=API_KEY)
         self.planner = LLMPlanner(self.llm)
         self.session_id = ""
-        self._pending_input = ""    # 追问前暂存的原始需求
-        self._pending_clarify = []  # 待追问的问题列表
+        self._pending_input = ""
+        self._pending_clarify = []
+        self.conversation_history: list[dict] = []
 
         self.event_bus = EventBus()
         self.orchestrator = self._build(use_teammate)
@@ -175,22 +179,22 @@ class ChatAgent:
     # ── 核心入口 ──
 
     async def start(self):
-        """启动 Agent"""
-        self.session_id = await self.orchestrator.start_session("")
+        """启动 Agent——不触发规划，等用户输入再说"""
+        self.session_id = "pending"
         sp("\n[Agent] 你好！今天下午有什么安排？")
-        sp("        比如：带我老婆孩子出去玩一下午\n")
 
     async def handle_message(self, user_input: str) -> str:
         """处理用户消息"""
-        if not self.session_id:
-            return "系统还没准备好"
+        # 首次输入：创建真实 session
+        if self.session_id == "pending":
+            self.session_id = await self.orchestrator.start_session(user_input)
 
         # 保存用户输入到对话历史
         self.conversation_history.append({"role": "user", "content": user_input})
 
         # 取消
         if any(k in user_input for k in ("取消", "不去了", "算了", "再见")):
-            if self.session_id:
+            if self.session_id and self.session_id != "pending":
                 await self.orchestrator.cancel_session(self.session_id)
             self._pending_input = ""
             self._pending_clarify = []
@@ -201,16 +205,16 @@ class ChatAgent:
         # ── 追问环节：检测缺少信息 ──
         if self._pending_clarify:
             # 用户正在回答追问
-            next_q = self._pending_clarify.pop(0)
+            next_k, next_q = self._pending_clarify.pop(0)
             if self._pending_clarify:
                 # 还有更多问题
-                q = self._pending_clarify[0]
-                question = self.CLARIFY_QUESTIONS.get(q, f"请告诉我{q.replace('_',' ')}")
-                return f"好的。{question}"
+                _, q_text = self._pending_clarify[0]
+                return f"好的。{q_text}"
             else:
                 # 追问完毕，拼合原始需求+补充信息，开始规划
                 combined = f"{self._pending_input}，{user_input}"
                 self._pending_input = ""
+                self._pending_clarify = []
                 return await self._do_plan(combined)
 
         # ── 首次输入：先检测需不需要追问 ──
@@ -218,28 +222,43 @@ class ChatAgent:
         state = status.itinerary_state
 
         if state in ("init", "draft"):
-            # 调用 LLM 解析意图，检查是否缺少信息
+            # 构建追问列表
+            to_ask = []
+
+            # 1) LLM 检测缺少的信息
             try:
                 ctx_result = await self.planner.handle_user_context({"input": user_input})
                 if ctx_result.get("success"):
                     missing = ctx_result["data"].get("missing_info", [])
-                    # 过滤出需要追问的项
-                    to_ask = [m for m in missing if m in self.CLARIFY_QUESTIONS]
-                    if to_ask:
-                        self._pending_input = user_input
-                        self._pending_clarify = to_ask
-                        q = to_ask[0]
-                        question = self.CLARIFY_QUESTIONS[q]
-                        return f"好的，{question}"
+                    for k, q in self.CLARIFY_QUESTIONS:
+                        if k in missing and k not in [a[0] for a in to_ask]:
+                            to_ask.append((k, q))
             except Exception:
                 pass
+
+            # 2) 独立检查：是否提到了同行人，如没提到则主动问
+            has_companion = any(kw in user_input for kw in self.COMPANION_KEYWORDS)
+            if not has_companion and "companions" not in [a[0] for a in to_ask]:
+                to_ask.append(("companions", "几个人去？有小朋友或者老人一起吗"))
+
+            # 3) 独立检查：是否提到了出发时间，如没提到则主动问
+            has_time = any(k in user_input for k in ["点", "点出发", "下午", "早上", "上午", "中午", "晚上"])
+            if not has_time and "start_time" not in [a[0] for a in to_ask]:
+                to_ask.append(("start_time", "大概几点出发？比如下午2点"))
+
+            if to_ask:
+                self._pending_input = user_input
+                self._pending_clarify = to_ask
+                q_text = to_ask[0][1]
+                return f"好的，{q_text}"
+
             # 不需要追问 → 直接规划
             return await self._do_plan(user_input)
 
         # ── PENDING_CONFIRM：已有方案，判断下一步 ──
         elif state == "pending_confirm":
-            # 用户确认 → 履约
-            if any(k in user_input for k in ("确认", "好", "行", "安排", "可以", "就这样")):
+            # 用户确认 → 履约（排除"不可以""不行""不好"）
+            if re.search(r'(?<!不)(确认|好|行|可以|安排|就这样|没问题)', user_input):
                 return await self._do_execute()
 
             # 用户提供新约束 → 重新规划
