@@ -280,7 +280,7 @@ class LLMPlanner:
                 if rest_data and rest_data.get("poi_id"):
                     logger.warning("[LLMPlanner] LLM 未生成餐厅节点，自动补入")
                     validated_nodes.append({
-                        "node_id": f"node_{len(validated_nodes)+1:03d}",
+                        "node_id": f"node_{uuid.uuid4()}",
                         "poi_id": rest_data.get("poi_id", ""),
                         "poi_name": rest_data.get("name", "餐厅"),
                         "category": "restaurant",
