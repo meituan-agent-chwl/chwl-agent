@@ -9,7 +9,19 @@
 
 **Purpose**: Show full lifecycle: plan → confirm → fulfill → done
 
-### Step 1: Start Planning
+### Step 1 (chat_demo): Clarification Round
+
+| Item | Detail |
+|------|--------|
+| **User says** | "下午出去玩" |
+| **Agent response** | "好的，大概几点出发？比如下午2点" |
+| **User says** | "2点" |
+| **Agent response** | "好的。有小朋友吗？几岁了" |
+| **User says** | "有个5岁孩子" |
+| **Agent action** | Starts planning with combined input "下午出去玩，2点，有个5岁孩子" |
+| **Backend code** | `chat_demo.py` handle_message L167-L199 |
+
+### Step 1 (FastAPI): Start Planning
 
 | Item | Detail |
 |------|--------|
