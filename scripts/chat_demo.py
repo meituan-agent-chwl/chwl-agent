@@ -2,26 +2,22 @@
 Chat Demo — LLM 驱动的 AI Agent 对话交互
 
 真正的 Agent 循环：
-  用户输入 → 展示工具调用过程 → LLM 规划 → 展示方案 → 等待下一步
+  用户输入 → LLM 理解意图 → 执行操作（规划/履约/重规划/展示）→ 回复用户
 
 用法:
     python -X utf-8 scripts/chat_demo.py
 
-支持的自然语言交互:
-    "下午带老婆孩子出去玩"     → 规划行程
-    "老婆在减肥"              → 更新偏好，重规划
-    "确认" / "行"            → 开始履约
-    "孩子累了"               → 触发异常重规划
-    "取消"                  → 取消行程
+架构:
+  handle_message → LLM 意图路由 → action dispatch → Orchestrator API → 回复用户
+                   (30行 if/elif 替换为 Agent 循环)
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
-import re
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -39,10 +35,38 @@ logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
 
 API_KEY = os.environ.get("DEEPSEEK_API_KEY", "sk-67937130fddf4be086e73e7b2f6d293c")
 
-# ── 安全打印（兼容 GBK 终端） ──────────────────────────────
+
+# ── Agent System Prompt ────────────────────────────────────
+
+AGENT_PROMPT = """你是本地生活管家「小美」。你的工作是帮用户安排下午出行。
+
+# 你可以执行的操作
+- plan: 规划新行程（用户提出新需求时）
+- confirm: 确认方案、开始履约（用户说「好」「确认」「安排」「就这样」时）
+- replan: 重新规划（用户对方案不满意、提出新偏好时）
+- cancel: 取消行程（用户说「取消」「不去了」「算了」时）
+- show_plan: 展示当前行程（用户问「什么方案」「看看」时）
+- clarify: 追问用户（缺少出发时间、人数等关键信息时）
+- chat: 闲聊/无需操作（其他情况）
+
+# 当前系统状态
+行程状态: {state}
+当前方案: {plan_summary}
+
+# 输出格式（严格 JSON，不要 Markdown）
+{{"action": "plan|confirm|replan|cancel|show_plan|clarify|chat", "response": "你对用户说的话，口语化不超过3句", "reason": "理解到的用户意图"}}
+
+# 规则
+- 用户没提出发时间或人数时 action=clarify
+- 用户说「孩子累了」「太远了」「换一个」等不满意内容时 action=replan
+- 同时回答了多个问题时直接 action=plan
+- 不确定时 action=chat
+"""
+
+
+# ── 安全打印（兼容 GBK） ──────────────────────────────────
 
 def sp(text: str):
-    """safe print"""
     try:
         print(text)
     except UnicodeEncodeError:
@@ -56,29 +80,12 @@ def sp(text: str):
 # ── Agent ──────────────────────────────────────────────────
 
 class ChatAgent:
-    """
-    真正 AI Agent 对话循环。
-
-    改进：
-    1. 展示工具调用过程（EventBus 事件实时输出）
-    2. 追问环节：检测缺少信息时先问用户再规划
-    3. 偏好更新触发重新规划
-    """
-
-    CLARIFY_QUESTIONS = [
-        ("start_time", "大概几点出发？比如下午2点"),
-        ("companions", "几个人去？有小朋友或者老人一起吗"),
-    ]
-
-    COMPANION_KEYWORDS = ["孩子", "小孩", "儿童", "宝宝", "婴儿", "老人", "父母", "爸妈",
-                          "老婆", "老公", "朋友", "闺蜜", "兄弟", "同学", "同事"]
+    """LLM 驱动的 Agent 对话循环"""
 
     def __init__(self, use_teammate: bool = False):
         self.llm = LLMClient(api_key=API_KEY)
         self.planner = LLMPlanner(self.llm)
         self.session_id = ""
-        self._pending_input = ""
-        self._pending_clarify = []
         self.conversation_history: list[dict] = []
 
         self.event_bus = EventBus()
@@ -87,14 +94,11 @@ class ChatAgent:
 
     def _build(self, use_teammate: bool) -> Orchestrator:
         tools = ToolRegistry()
-
-        # LLM 推理 handler
         tools.register_mock("user_context", self.planner.handle_user_context)
         tools.register_mock("candidates_score", self.planner.handle_candidates_score)
         tools.register_mock("itinerary_generate", self.planner.handle_itinerary_generate)
         tools.register_mock("itinerary_replan", self.planner.handle_itinerary_replan)
 
-        # 事实数据源
         if use_teammate:
             adapter = TeammateAPIAdapter("http://127.0.0.1:8000")
             for name in ["activities_search", "restaurants_search", "weather",
@@ -106,32 +110,19 @@ class ChatAgent:
                          "restaurants_search", "route_check",
                          "booking_execute", "booking_status"]:
                 tools.register_mock(name, getattr(mem, f"handle_{name}"))
-
         return Orchestrator(tools, event_bus=self.event_bus)
 
     def _subscribe_events(self):
-        """订阅 EventBus 事件 → 实时展示工具调用过程"""
-        self.event_bus.subscribe("status_update", self._on_status)
-        self.event_bus.subscribe("tool_warning", self._on_tool_warning)
+        self.event_bus.subscribe("status_update", lambda ctx, e: sp(f"  . {e['data'].get('message','')}"))
+        self.event_bus.subscribe("tool_warning", lambda ctx, e: sp(f"  [!] {e['data']['tool']}: {e['data'].get('error',{}).get('code','')}"))
         self.event_bus.subscribe("plan_complete", self._on_plan_complete)
-        self.event_bus.subscribe("plan_failed", self._on_plan_failed)
-        self.event_bus.subscribe("execution_started", self._on_exec_start)
-        self.event_bus.subscribe("booking_status_changed", self._on_booking)
-        self.event_bus.subscribe("execution_complete", self._on_exec_done)
-        self.event_bus.subscribe("node_failed", self._on_node_fail)
-        self.event_bus.subscribe("replan_ready", self._on_replan_ready)
+        self.event_bus.subscribe("plan_failed", lambda ctx, e: sp(f"  [!] 规划失败"))
+        self.event_bus.subscribe("execution_started", lambda ctx, e: sp(f"\n[履约] 开始预约..."))
+        self.event_bus.subscribe("booking_status_changed", lambda ctx, e: sp(f"  . {e['data'].get('name','')}: {e['data'].get('status','')}"))
+        self.event_bus.subscribe("execution_complete", lambda ctx, e: sp(f"\n[履约完成] 所有预订成功"))
+        self.event_bus.subscribe("node_failed", lambda ctx, e: sp(f"  [!] {e['data'].get('name','')} 失败"))
+        self.event_bus.subscribe("replan_ready", lambda ctx, e: sp(f"  [重规划] 调整方案已就绪"))
         self.event_bus.subscribe("resource_loss_warning", self._on_resource_loss)
-
-    # ── 事件处理 ──
-
-    def _on_status(self, ctx, event):
-        msg = event["data"].get("message", "")
-        if msg:
-            sp(f"  . {msg}")
-
-    def _on_tool_warning(self, ctx, event):
-        err = event["data"].get("error", {})
-        sp(f"  [!] {event['data']['tool']}: {err.get('code', '')}")
 
     def _on_plan_complete(self, ctx, event):
         itin = event["data"].get("itinerary", {})
@@ -140,245 +131,149 @@ class ChatAgent:
         for n in nodes:
             sp(f"  - {n.get('scheduled_start','')} {n.get('poi_name','')} ({n.get('duration_min','')}min)")
 
-    def _on_plan_failed(self, ctx, event):
-        sp(f"  [!] 规划失败: {event['data'].get('error','')}")
-
-    def _on_exec_start(self, ctx, event):
-        sp(f"\n[履约] 开始预约...")
-
-    def _on_booking(self, ctx, event):
-        name = event["data"].get("name", "")
-        st = event["data"].get("status", "")
-        sp(f"  . {name}: {st}")
-
-    def _on_exec_done(self, ctx, event):
-        sp(f"\n[履约完成] 所有预订成功")
-
-    def _on_node_fail(self, ctx, event):
-        name = event["data"].get("name", "")
-        level = event["data"].get("fallback_level", "?")
-        sp(f"  [!] {name} 失败 (L{level})")
-
-    def _on_replan_ready(self, ctx, event):
-        sp(f"  [重规划] 调整方案已就绪")
-
     def _on_resource_loss(self, ctx, event):
-        """资源损失警告"""
         losses = event["data"].get("losses", [])
         if losses:
             sp(f"  [!] 取消将释放以下预约/资格：")
             for loss in losses:
-                name = loss.get("name", "")
-                ref = loss.get("booking_ref", "")
-                typ = loss.get("type", loss.get("reason", ""))
-                sp(f"      - {name} ({typ}) ref: {ref}")
-        msg = event["data"].get("message", "")
-        if msg:
-            sp(f"  [!] {msg}")
+                sp(f"      - {loss.get('name','')} ({loss.get('type',loss.get('reason',''))})")
 
-    # ── 核心入口 ──
+    # ── Agent 循环 ──
 
     async def start(self):
-        """启动 Agent——不触发规划，等用户输入再说"""
-        self.session_id = "pending"
+        self.session_id = ""
         sp("\n[Agent] 你好！今天下午有什么安排？")
 
-    async def handle_message(self, user_input: str) -> str:
-        """处理用户消息"""
-        # 首次输入：创建真实 session
-        if self.session_id == "pending":
-            self.session_id = await self.orchestrator.start_session(user_input)
+    async def _build_context(self) -> str:
+        """构建当前状态摘要（异步）"""
+        if not self.session_id:
+            return json.dumps({"state": "none", "plan": "无"}, ensure_ascii=False)
+        try:
+            s = await self.orchestrator.get_status(self.session_id)
+            nodes_text = "、".join(
+                f"{n.get('start_time','')} {n.get('name','')}" for n in s.nodes[:3]
+            ) or "无"
+            return json.dumps({"state": s.itinerary_state, "plan": nodes_text}, ensure_ascii=False)
+        except Exception:
+            return json.dumps({"state": "unknown", "plan": "无"}, ensure_ascii=False)
 
-        # 保存用户输入到对话历史
+    async def handle_message(self, user_input: str) -> str:
+        """LLM 驱动的 Agent 路由 — 替代硬编码状态机"""
         self.conversation_history.append({"role": "user", "content": user_input})
 
-        # 取消
+        # 取消直接处理（不经过 LLM，避免漏判）
         if any(k in user_input for k in ("取消", "不去了", "算了", "再见")):
-            if self.session_id and self.session_id != "pending":
+            if self.session_id:
                 await self.orchestrator.cancel_session(self.session_id)
-            self._pending_input = ""
-            self._pending_clarify = []
+                self.session_id = ""
             reply = "好的，已取消。下次需要随时找我。"
             self.conversation_history.append({"role": "assistant", "content": reply})
             return reply
 
-        # ── 追问环节：检测缺少信息 ──
-        if self._pending_clarify:
-            # 用户正在回答追问
-            next_k, next_q = self._pending_clarify.pop(0)
-            if self._pending_clarify:
-                # 还有更多问题
-                _, q_text = self._pending_clarify[0]
-                return f"好的。{q_text}"
-            else:
-                # 追问完毕，拼合原始需求+补充信息，开始规划
-                combined = f"{self._pending_input}，{user_input}"
-                self._pending_input = ""
-                self._pending_clarify = []
-                return await self._do_plan(combined)
+        # 首次输入 → 创建 session
+        if not self.session_id:
+            self.session_id = await self.orchestrator.start_session(user_input)
 
-        # ── 首次输入：先检测需不需要追问 ──
-        status = await self.orchestrator.get_status(self.session_id)
-        state = status.itinerary_state
+        # 发给 LLM 做意图理解
+        ctx = await self._build_context()
+        ctx_data = json.loads(ctx)
+        prompt = AGENT_PROMPT.format(state=ctx_data["state"], plan_summary=ctx_data["plan"])
 
-        if state in ("init", "draft"):
-            # 构建追问列表
-            to_ask = []
-
-            # 1) LLM 检测缺少的信息
-            try:
-                ctx_result = await self.planner.handle_user_context({"input": user_input})
-                if ctx_result.get("success"):
-                    missing = ctx_result["data"].get("missing_info", [])
-                    for k, q in self.CLARIFY_QUESTIONS:
-                        if k in missing and k not in [a[0] for a in to_ask]:
-                            to_ask.append((k, q))
-            except Exception:
-                pass
-
-            # 2) 独立检查：是否提到了同行人，如没提到则主动问
-            has_companion = any(kw in user_input for kw in self.COMPANION_KEYWORDS)
-            if not has_companion and "companions" not in [a[0] for a in to_ask]:
-                to_ask.append(("companions", "几个人去？有小朋友或者老人一起吗"))
-
-            # 3) 独立检查：是否提到了出发时间，如没提到则主动问
-            has_time = any(k in user_input for k in ["点", "点出发", "下午", "早上", "上午", "中午", "晚上"])
-            if not has_time and "start_time" not in [a[0] for a in to_ask]:
-                to_ask.append(("start_time", "大概几点出发？比如下午2点"))
-
-            if to_ask:
-                self._pending_input = user_input
-                self._pending_clarify = to_ask
-                q_text = to_ask[0][1]
-                return f"好的，{q_text}"
-
-            # 不需要追问 → 直接规划
-            return await self._do_plan(user_input)
-
-        # ── PENDING_CONFIRM：已有方案，判断下一步 ──
-        elif state == "pending_confirm":
-            # 用户确认 → 履约（排除"不可以""不行""不好"）
-            if re.search(r'(?<!不)(确认|好|行|可以|安排|就这样|没问题)', user_input):
-                return await self._do_execute()
-
-            # 用户提供新约束 → 重新规划
-            if any(k in user_input for k in ("减肥", "清淡", "换", "改", "不要", "不行", "累", "远")):
-                return await self._do_replan(user_input)
-
-            # 默认：展示当前方案
-            return self._show_plan(status.nodes, status.summary)
-
-        # ── EXECUTING：履约中 ──
-        elif state == "executing":
-            if any(k in user_input for k in ("累", "困", "不想")):
-                sentiment = UserSentiment(type="tired", description=user_input)
-                await self.orchestrator.handle_user_sentiment(self.session_id, sentiment)
-                return "收到，我调整一下后续安排。"
-            return "正在预约中，稍等一会就好。"
-
-        # ── COMPLETED：履约完成 ──
-        elif state == "completed":
-            # 取消
-            if any(k in user_input for k in ("取消", "不去了", "算了")):
-                await self.orchestrator.cancel_session(self.session_id)
-                return "好的，已取消"
-            # 新偏好 → 重新规划
-            if any(k in user_input for k in ("减肥", "清淡", "换", "改", "累", "困")):
-                sentiment = UserSentiment(type="tired", description=user_input)
-                await self.orchestrator.handle_user_sentiment(self.session_id, sentiment)
-                return "好的，我调整一下。"
-            # 查看方案
-            if any(k in user_input for k in ("看看", "方案", "什么")):
-                return self._show_plan(status.nodes, status.summary)
-            # 默认走 LLM 回复
-            s = await self.orchestrator.get_status(self.session_id)
-            return await self.planner.generate_response(
-                {"phase": "completed", "nodes": s.nodes, "summary": s.summary}, user_input
+        try:
+            result = await self.llm.chat_json(
+                system=prompt,
+                messages=self.conversation_history[-8:],
+                temperature=0.2,
             )
+        except Exception:
+            return "我没理解，您能再说一遍吗？"
 
-        # ── NEEDS_REPLAN ──
-        elif state == "needs_replan":
-            if any(k in user_input for k in ("好", "确认", "行", "换", "看看")):
-                # 回到 pending_confirm 让用户重新确认
+        action = result.get("action", "chat")
+        response = result.get("response", "您说")
+        self.conversation_history.append({"role": "assistant", "content": response})
+
+        # 带 guardrail 的 action dispatch
+        try:
+            status = await self.orchestrator.get_status(self.session_id)
+            state = status.itinerary_state
+        except Exception:
+            state = "none"
+
+        invalid_map = {
+            "confirm": ["init", "draft", "none", "cancelled"],
+            "replan": ["init", "draft", "none"],
+            "cancel": ["cancelled", "none"],
+            "plan": ["init", "draft", "none", "executing", "completed"],
+            "show_plan": ["init", "draft", "none"],
+        }
+        if action in invalid_map and state in invalid_map[action]:
+            action = "chat"
+
+        # 执行
+        if action == "plan":
+            return await self._do_plan(user_input)
+        elif action == "confirm":
+            return await self._do_execute()
+        elif action == "replan":
+            return await self._do_replan(user_input)
+        elif action == "show_plan":
+            try:
                 s = await self.orchestrator.get_status(self.session_id)
-                return self._show_plan(s.nodes, s.summary) + "\n您看这样可以吗？输入「确认」继续。"
-            return "行程需要调整。输入「看看」查看调整方案，或输入新的需求重新规划。"
+                return self._show_plan_str(s.nodes)
+            except Exception:
+                return "目前还没有行程方案。"
+        elif action == "cancel":
+            await self.orchestrator.cancel_session(self.session_id)
+            self.session_id = ""
+            return "好的，已取消。"
+        else:
+            return response  # clarify 或 chat
 
-        # ── 兜底 ──
-        return await self.planner.generate_response(
-            {"phase": "unknown", "state": state, "nodes": status.nodes}, user_input
-        )
-
-    # ── 核心操作 ──
+    # ── 操作 ──
 
     async def _do_plan(self, user_input: str) -> str:
-        """启动新规划，等待完成"""
-        # 取消旧任务 + 旧会话
         if self.session_id:
             try:
                 await self.orchestrator.cancel_session(self.session_id)
             except Exception:
                 pass
             await asyncio.sleep(0.3)
-
-        # 创建新会话（同步启动 Phase 1）
         self.session_id = await self.orchestrator.start_session(user_input)
-
-        # 等待 Phase 1 完成
-        for i in range(40):
+        for _ in range(40):
             await asyncio.sleep(1)
             s = await self.orchestrator.get_status(self.session_id)
-            if s.itinerary_state == "pending_confirm":
-                status = s
-                break
-            elif s.itinerary_state in ("executing", "completed", "needs_replan"):
-                status = s
+            if s.itinerary_state in ("pending_confirm", "executing", "completed", "needs_replan"):
                 break
         else:
             return "规划超时，请重试"
-
-        if status.itinerary_state == "pending_confirm" and status.nodes:
-            # LLM 生成回复（携带对话历史）
-            context = {"phase": "plan_complete", "nodes": status.nodes, "summary": status.summary}
-            if self.conversation_history:
-                context["conversation_history"] = self.conversation_history[-6:]  # 最近 3 轮
-            reply = await self.planner.generate_response(context, user_input)
-            return reply
-        return "我看看周边有什么合适的..."
+        s = await self.orchestrator.get_status(self.session_id)
+        return f"方案做好了：{self._show_plan_str(s.nodes)}"
 
     async def _do_replan(self, user_input: str) -> str:
-        """用户更新偏好 → 重新规划"""
-        sp(f"\n[重新规划] 根据您的反馈调整方案...")
-        try:
-            await self.orchestrator.cancel_session(self.session_id)
-        except Exception:
-            pass
-        await asyncio.sleep(0.3)
+        sp("\n[重新规划] 根据您的反馈调整方案...")
         return await self._do_plan(user_input)
 
     async def _do_execute(self) -> str:
-        """履约（实时展示进度）"""
         try:
             await self.orchestrator.confirm_itinerary(self.session_id)
         except Exception as e:
             return f"预约启动失败: {e}"
         sp("  预约进度：")
-        # 等履约完成（事件实时通过 _on_booking 展示）
-        for i in range(20):
+        for _ in range(20):
             await asyncio.sleep(1.5)
             s = await self.orchestrator.get_status(self.session_id)
             if s.itinerary_state in ("completed", "needs_replan"):
                 break
         return "全部预约搞定！您按计划出发就行。"
 
-    # ── 辅助 ──
+    @staticmethod
+    def _show_plan_str(nodes) -> str:
+        if not nodes:
+            return "暂无方案"
+        return "\n".join(f"  {n.get('start_time','')} {n.get('name','')}" for n in nodes[:5])
 
-    def _show_plan(self, nodes, summary) -> str:
-        lines = ["目前方案是："]
-        for n in nodes[:5]:
-            lines.append(f"  - {n.get('start_time', '')} {n.get('name', '')}")
-        lines.append("您看可以吗？")
-        return "\n".join(lines)
+
+# ── 主循环 ──────────────────────────────────────────────────
 
 def main():
     use_teammate = "--teammate" in sys.argv
@@ -402,7 +297,6 @@ def main():
                 break
             sp("")
             response = loop.run_until_complete(agent.handle_message(user_input))
-            agent.conversation_history.append({"role": "assistant", "content": response})
             sp(f"\n[Agent] {response}\n")
     except (KeyboardInterrupt, EOFError):
         sp("\n[Agent] 再见！")
