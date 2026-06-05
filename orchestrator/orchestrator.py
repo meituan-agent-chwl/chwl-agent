@@ -398,7 +398,23 @@ class Orchestrator:
             })
 
             if score_result.get("success"):
-                ctx.scored_candidates = score_result["data"].get("scored", [])
+                # 合并评分结果和原始数据（评分结果只有 poi_id + score，缺 category/name）
+                scored_list = score_result["data"].get("scored", [])
+                scored_map = {s["poi_id"]: s for s in scored_list if s.get("poi_id")}
+                ctx.scored_candidates = []
+                for c in ctx.raw_candidates:
+                    pid = c.get("poi_id", "")
+                    if pid in scored_map:
+                        merged = dict(scored_map[pid])
+                        merged["name"] = c.get("name", "")
+                        merged["category"] = c.get("category", "")
+                        merged["distance_km"] = c.get("distance_km", 0)
+                        merged["rating"] = c.get("rating", 0)
+                        merged["tags"] = c.get("tags", [])
+                        merged["estimated_duration_min"] = c.get("estimated_duration_min", 60)
+                        ctx.scored_candidates.append(merged)
+                    else:
+                        ctx.scored_candidates.append(c)
             else:
                 logger.warning("[Phase1] 评分失败，使用未评分候选")
                 ctx.scored_candidates = [
