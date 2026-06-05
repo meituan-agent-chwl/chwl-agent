@@ -301,10 +301,7 @@ class LLMPlanner:
                 validated_nodes = [n for n in raw_nodes if n.get("poi_id") in valid_poi_ids]
 
             # 确保有 restaurant 节点。如 LLM 未生成，从 selected 中补入
-            categories = [n.get("category", "?") for n in validated_nodes]
-            has_restaurant = "restaurant" in categories
-            logger.info("[LLMPlanner] 节点类别: %s, has_restaurant=%s, strict_fail=%d",
-                         categories, has_restaurant, len(strict_fail))
+            has_restaurant = any(n.get("category") == "restaurant" for n in validated_nodes)
             if not has_restaurant:
                 rest_data = selected.get("restaurant", {})
                 if rest_data and rest_data.get("poi_id"):

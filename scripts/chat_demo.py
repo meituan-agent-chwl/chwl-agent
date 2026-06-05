@@ -130,7 +130,12 @@ class ChatAgent:
         self.event_bus.subscribe("resource_loss_warning", self._on_resource_loss)
 
     def _on_plan_complete(self, ctx, event):
-        pass  # 方案展示由 _do_plan 返回文本处理，避免重复打印
+        itin = event["data"].get("itinerary", {})
+        nodes = itin.get("nodes", [])
+        sp(f"\n[规划完成] 共 {len(nodes)} 个活动")
+        for n in nodes:
+            sp(f"  {n.get('scheduled_start','?')}-{n.get('scheduled_end','?')} {n.get('poi_name','')} ({n.get('duration_min',0)}min)")
+        sp(f"  摘要: {itin.get('summary','')}")
 
     def _on_resource_loss(self, ctx, event):
         losses = event["data"].get("losses", [])

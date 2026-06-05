@@ -501,7 +501,20 @@ class Orchestrator:
                 sm = create_node_fsm()
                 ctx.node_sms[node.node_id] = sm
 
-            # 合理性校验（不通过则警告但不阻断，保证 Demo 主链路）
+            # 补全时间数据：LLM 可能缺失 scheduled_end，用 duration_min 推算
+            for i, n in enumerate(ctx.itinerary.nodes):
+                if not n.scheduled_end and n.scheduled_start and n.duration_min:
+                    # 用 scheduled_start + duration_min 推算 end_time
+                    h, m = map(int, n.scheduled_start.split(":"))
+                    total = h * 60 + m + n.duration_min
+                    n.scheduled_end = f"{total // 60:02d}:{total % 60:02d}"
+                if not n.scheduled_start and i > 0:
+                    # 用上一个节点的 end_time 作为 start_time
+                    prev = ctx.itinerary.nodes[i - 1]
+                    if prev.scheduled_end:
+                        n.scheduled_start = prev.scheduled_end
+
+            # 合理性校验（不通过则通知前端，但继续执行让用户看到方案）
             self._validate_feasibility(ctx)
             fc = ctx.itinerary.feasibility_check
             if not fc.passed:
@@ -509,8 +522,8 @@ class Orchestrator:
                 risk_msgs = risks[0]["data"]["risk_flags"] if risks else []
                 logger.warning("[Phase1] %s 合理性校验不通过: %s",
                                ctx.session_id[:12], risk_msgs)
-                await self.event_bus.emit("status_update", ctx, {
-                    "message": "行程合理性存在风险，已调整方案",
+                await self.event_bus.emit("feasibility_risks", ctx, {
+                    "passed": False, "risk_flags": risk_msgs,
                 })
 
             # 转换到 PENDING_CONFIRM（如果会话已被取消则跳过）
