@@ -256,6 +256,7 @@ class LLMPlanner:
         selected = payload.get("selected_nodes", {})
         departure = payload.get("departure_time", "14:00")
         scene = payload.get("scene", "family")
+        user_feedback = payload.get("user_feedback", "")
 
         # 收集所有合法的 POI ID + 类别映射
         valid_poi_ids = set()
@@ -277,6 +278,7 @@ class LLMPlanner:
                     "main_activity": selected.get("main_activity", {}),
                     "restaurant": selected.get("restaurant", {}),
                     "optional_activity": selected.get("optional_activity", {}),
+                    "user_feedback": user_feedback,
                 }, ensure_ascii=False)}],
             )
             # POI 合法性校验：先按严格模式（ID+类别），再按宽松模式（仅ID）

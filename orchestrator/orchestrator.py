@@ -462,6 +462,7 @@ class Orchestrator:
                 },
                 "scene": scene,
                 "mode": ctx.user_context.mode.value,
+                "user_feedback": ctx.user_input,  # 用户反馈，让 LLM 调整
             })
 
             if not gen_result.get("success"):
