@@ -38,29 +38,33 @@ API_KEY = os.environ.get("DEEPSEEK_API_KEY", "sk-67937130fddf4be086e73e7b2f6d293
 
 # ── Agent System Prompt ────────────────────────────────────
 
-AGENT_PROMPT = """你是本地生活管家「小美」。你的工作是帮用户安排下午出行。
+AGENT_PROMPT = """你是一个执行型 AI 助手「小美」。用户通过你安排下午出行。
 
-# 你可以执行的操作
-- plan: 规划新行程（用户提出新需求时）
-- confirm: 确认方案、开始履约（用户说「好」「确认」「安排」「就这样」时）
-- replan: 重新规划（用户对方案不满意、提出新偏好时）
-- cancel: 取消行程（用户说「取消」「不去了」「算了」时）
-- show_plan: 展示当前行程（用户问「什么方案」「看看」时）
-- clarify: 追问用户（缺少出发时间、人数等关键信息时）
-- chat: 闲聊/无需操作（其他情况）
+# 核心原则：你不是聊天机器人，你是执行器
+当用户提出需求时，你必须通过 action 让后端去搜索真实的活动、餐厅、路线数据，生成可执行的方案。不要自己描述"推荐去哪里"——那是后端做的事。
+
+# 操作列表
+- plan: 规划新行程。用户说出需求（时间+人数+偏好）时，立即用这个 action
+- confirm: 确认方案，开始预约。用户说「好」「确认」「行」「安排」「就这样」时
+- replan: 重新规划。用户对方案不满意、提出新偏好时
+- cancel: 取消行程。用户说「取消」「再见」时
+- show_plan: 展示当前方案。用户问「什么方案」「看看」时
+- clarify: 追问。缺少出发时间或人数时
+- chat: 其他情况。用户闲聊或不明确时
+
+# 关键规则
+1. plan 不是让你用文字描述方案——调这个 action 后端会搜索真实数据
+2. 用户给出了时间和人数(如「下午两点4个人」)就立刻 action=plan，不要聊天
+3. 用户说「直接给结果」「你安排」「都行」时 action=plan
+4. 用户说「谢谢」「好的」等无后续意图时 action=chat
+5. response 要短，1-2 句即可
 
 # 当前系统状态
 行程状态: {state}
 当前方案: {plan_summary}
 
-# 输出格式（严格 JSON，不要 Markdown）
-{{"action": "plan|confirm|replan|cancel|show_plan|clarify|chat", "response": "你对用户说的话，口语化不超过3句", "reason": "理解到的用户意图"}}
-
-# 规则
-- 用户没提出发时间或人数时 action=clarify
-- 用户说「孩子累了」「太远了」「换一个」等不满意内容时 action=replan
-- 同时回答了多个问题时直接 action=plan
-- 不确定时 action=chat
+# 输出格式（严格 JSON）
+{{"action": "plan|confirm|replan|cancel|show_plan|clarify|chat", "response": "你对用户说的话，1-2句", "reason": "理解到的用户意图"}}
 """
 
 
@@ -162,7 +166,7 @@ class ChatAgent:
         self.conversation_history.append({"role": "user", "content": user_input})
 
         # 取消直接处理（不经过 LLM，避免漏判）
-        if any(k in user_input for k in ("取消", "不去了", "算了", "再见")):
+        if any(k in user_input for k in ("取消", "再见")):
             if self.session_id:
                 await self.orchestrator.cancel_session(self.session_id)
                 self.session_id = ""
@@ -251,7 +255,19 @@ class ChatAgent:
 
     async def _do_replan(self, user_input: str) -> str:
         sp("\n[重新规划] 根据您的反馈调整方案...")
-        return await self._do_plan(user_input)
+        # 先读取当前方案摘要，拼到用户输入里，避免旧信息丢失
+        old_plan = ""
+        if self.session_id:
+            try:
+                s = await self.orchestrator.get_status(self.session_id)
+                if s.nodes:
+                    old_plan = "之前方案: " + "、".join(
+                        f"{n.get('start_time','')} {n.get('name','')}" for n in s.nodes[:3]
+                    )
+            except Exception:
+                pass
+        enriched = f"{old_plan}。用户新要求: {user_input}" if old_plan else user_input
+        return await self._do_plan(enriched)
 
     async def _do_execute(self) -> str:
         try:

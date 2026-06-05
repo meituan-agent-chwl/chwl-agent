@@ -280,22 +280,26 @@ class LLMPlanner:
                     "optional_activity": selected.get("optional_activity", {}),
                 }, ensure_ascii=False)}],
             )
-            # POI 合法性校验：过滤 LLM 编造的节点 + 类别不匹配的节点
+            # POI 合法性校验：先按严格模式（ID+类别），再按宽松模式（仅ID）
+            raw_nodes = result.get("nodes", [])
             validated_nodes = []
-            for node in result.get("nodes", []):
+            strict_fail = []
+            for node in raw_nodes:
                 poi_id = node.get("poi_id", "")
                 category = node.get("category", "")
                 node_name = node.get("poi_name", "")
                 if poi_id not in valid_poi_ids:
                     logger.warning("[LLMPlanner] 过滤编造 POI: %s (%s)", node_name, poi_id)
                     continue
-                # 类别匹配校验：活动 POI 不能当餐厅用
                 expected_cat = poi_category_map.get(poi_id, "")
                 if expected_cat and category and expected_cat != category:
-                    logger.warning("[LLMPlanner] 过滤类别不匹配: %s 期望=%s 实际=%s",
-                                   node_name, expected_cat, category)
+                    strict_fail.append(node)
                     continue
                 validated_nodes.append(node)
+            # 严格模式过滤后节点不足 2 个时，降级为仅 ID 校验
+            if len(validated_nodes) < 2 and strict_fail:
+                logger.warning("[LLMPlanner] 严格过滤后节点不足，降级为仅 ID 校验")
+                validated_nodes = [n for n in raw_nodes if n.get("poi_id") in valid_poi_ids]
 
             import uuid
             return {"success": True, "data": {

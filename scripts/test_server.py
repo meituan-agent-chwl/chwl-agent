@@ -24,7 +24,7 @@ from pydantic import BaseModel
 
 from core.tool_registry import ToolRegistry
 from mocks import MockBackend
-from orchestrator.orchestrator import Orchestrator
+from orchestrator.orchestrator import Orchestrator, _d
 
 logging.basicConfig(level=logging.INFO)
 
@@ -130,7 +130,7 @@ async def get_session(session_id: str):
     """查询会话状态"""
     try:
         status = await orchestrator.get_status(session_id)
-        return status.model_dump()
+        return _d(status)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -161,7 +161,7 @@ async def modify(session_id: str, req: ModifyRequest):
             new_resource=req.new_resource,
         )
         itinerary = await orchestrator.modify_itinerary(session_id, mod)
-        return itinerary.model_dump()
+        return _d(itinerary)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
