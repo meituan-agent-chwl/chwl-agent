@@ -205,12 +205,13 @@ class ChatAgent:
         except Exception:
             state = "none"
 
+        # 状态守卫层：非法 action 降级为 chat
         invalid_map = {
             "confirm": ["init", "draft", "none", "cancelled"],
-            "replan": ["init", "draft", "none"],
+            "replan": ["init", "none", "cancelled"],
             "cancel": ["cancelled", "none"],
-            "plan": ["init", "draft", "none", "executing", "completed"],
-            "show_plan": ["init", "draft", "none"],
+            "plan": ["init", "none", "executing", "completed"],
+            "show_plan": ["init", "none"],
         }
         if action in invalid_map and state in invalid_map[action]:
             action = "chat"
@@ -223,11 +224,13 @@ class ChatAgent:
         elif action == "replan":
             return await self._do_replan(user_input)
         elif action == "show_plan":
+            if state == "draft":
+                return "正在为您规划行程，请稍等片刻..."
             try:
                 s = await self.orchestrator.get_status(self.session_id)
-                return self._show_plan_str(s.nodes)
+                return self._show_plan_str(s.nodes) if s.nodes else "正在为您规划行程，请稍等..."
             except Exception:
-                return "目前还没有行程方案。"
+                return "正在为您规划行程，请稍等..."
         elif action == "cancel":
             await self.orchestrator.cancel_session(self.session_id)
             self.session_id = ""
