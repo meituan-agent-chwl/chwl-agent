@@ -97,69 +97,69 @@ SCORING_SYSTEM = """你是一个冷静、克制的城市活动评分器。
 - 距离超过 5km 扣分
 """
 
-ITINERARY_GENERATION_SYSTEM = """你是一个行程编排师。
+ITINERARY_GENERATION_SYSTEM = """你是一个行程编排师。你的核心任务是根据选中的 POI 和用户约束，生成一个时间合理、节奏舒适的 4-6 小时下午行程。
 
-根据选中的活动、餐厅和路线数据，生成一个 4-6 小时下午行程。
+【约束驱动规则——必须遵守】
+午餐时间窗: 11:30-13:30（方案包含餐厅时）
+晚餐时间窗: 17:30-19:00（方案包含餐厅时）
+活动时长: 主活动 60-120min，餐厅 55-70min，轻活动 30-45min
+缓冲时间: 相邻节点之间留 10-15min 过渡
+结束时间: 含儿童场景 20:00 前结束
+时间灵活: 不要机械固定顺序（活动→餐厅→散步），根据所选 POI 的特色动态编排
 
-【硬性约束】
-你必须 ONLY 使用下面提供的候选 POI 中的 ID。严禁编造不在候选列表中的 POI。
-每个节点的 poi_id 必须能从候选列表中匹配到。如果候选列表中没有合适的 POI，就返回空的 nodes 数组。
+【用户反馈处理——必须遵守】
+如果 user_feedback 不为空，必须将其作为硬性约束，直接影响时间安排。
+示例：
+  feedback = "吃饭时间有点早" → 餐厅时间必须 >= 11:30，且优先安排在 12:00-13:00 之间
+  feedback = "太赶了" → 增加节点间缓冲时间到 15-20min
+  feedback = "不想太晚" → 结束时间提前到 18:00 前
 
-【结构要求——绝对约束】
-生成的 nodes 必须包含 3 个节点，类型分别为：main_activity、restaurant、optional_activity。
-缺少任何一类节点则整体方案无效。必须从 valid_poi_ids 中选取对应的 ID。
+【POI 合法性——必须遵守】
+所有节点的 poi_id 必须来自 valid_poi_ids。严禁编造。
 
-输出 JSON 格式：
+输出 JSON：
 {
-    "summary": "一句话行程总结",
+    "summary": "行程总结",
     "total_duration_min": 整数,
     "nodes": [
         {
-            "node_id": "node_001",
-            "poi_id": "必须严格来自候选列表",
-            "poi_name": "必须与 poi_id 对应的名称一致",
-            "category": "main_activity|restaurant|optional_activity",
-            "start_time": "14:20",
-            "end_time": "16:20",
-            "duration_min": 120,
-            "tags": ["室内", "亲子"],
-            "feasibility_note": "营业时间覆盖，排队正常"
+            "node_id": "node_001", "poi_id": "来自候选列表",
+            "poi_name": "与 poi_id 对应", "category": "main_activity|restaurant|optional_activity",
+            "start_time": "HH:MM", "end_time": "HH:MM", "duration_min": 整数,
+            "tags": [], "feasibility_note": ""
         }
     ]
 }
-
-编排规则:
-1. 活动安排在 14:00-18:00 时间段
-2. 活动→餐厅之间留 10-15min 交通缓冲
-3. 主活动 60-120min，餐厅 60-70min，轻活动 30-45min
-4. 含儿童场景 20:00 前结束
-5. 相邻节点时间必须合理（不能重叠）
 """
 
-REPLAN_SYSTEM = """你是一个行程重规划器。
+REPLAN_SYSTEM = """你是一个行程重规划器。当收到用户反馈或节点失败时，用约束驱动的方式重排整个行程。
 
-当行程中某个节点失败时，用备用 POI 替换受影响的未来节点。
+【用户反馈处理——硬性约束】
+如果 user_feedback 不为空，必须将其中的意见转换为时间约束：
+  "太早" → 对应节点时间推迟 60-90min
+  "太晚" → 对应节点时间提前 60-90min
+  "太赶" → 增加节点间缓冲到 20min
+  "太松" → 减少缓冲到 5min
+  "不合理" → 重新评估所有节点的时间分配
+如果 feedback 包含具体时间要求（如"6点吃"），直接使用该时间
 
-输出 JSON 格式：
+【时间窗规则】
+午餐: 11:30-13:30 | 晚餐: 17:30-19:00
+餐厅必须在对应时间窗内，不许提前或延后
+
+【保护规则】
+- 绝对不修改 completed_lock 和 user_pinned 节点
+- 只替换未来未执行的节点
+
+输出 JSON：
 {
-    "need_user_confirm": true/false,
-    "replan_summary": "一句话说明改了哪里",
+    "need_user_confirm": true,
+    "replan_summary": "改了哪里及原因",
     "changed_nodes": [
-        {
-            "old_node_id": "node_002",
-            "new_poi_id": "res_fam_003",
-            "new_name": "亲子轻食餐厅",
-            "new_scheduled_time": "17:00",
-            "reason": "替换原因"
-        }
+        {"old_node_id": "node_002", "new_poi_id": "", "new_name": "", "new_scheduled_time": "17:00", "reason": "调整原因"}
     ],
     "unchanged_nodes": ["node_001"]
 }
-
-规则:
-- 绝对不修改 completed_lock 和 user_pinned 节点
-- 只替换未来未执行的节点
-- 新节点的时间需与前序节点对齐
 """
 
 RESPONSE_SYSTEM = """你是一个本地生活管家。
@@ -333,14 +333,15 @@ class LLMPlanner:
     # ── 重规划 ──
 
     async def handle_itinerary_replan(self, payload: dict) -> dict:
-        """局部重规划"""
+        """局部重规划（约束驱动）"""
         try:
             trigger = payload.get("trigger", {})
+            user_feedback = payload.get("user_feedback", trigger.get("description", ""))
             result = await self.llm.chat_json(
                 system=REPLAN_SYSTEM,
                 messages=[{"role": "user", "content": json.dumps({
                     "trigger_reason": trigger.get("type", "unknown"),
-                    "description": trigger.get("description", ""),
+                    "user_feedback": user_feedback,
                     "locked_nodes": payload.get("policy", {}).get("locked_nodes", []),
                     "pending_nodes": payload.get("policy", {}).get("pending_nodes", []),
                 }, ensure_ascii=False)}],
