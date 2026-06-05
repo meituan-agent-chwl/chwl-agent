@@ -92,6 +92,8 @@ class ChatAgent:
         self.planner = LLMPlanner(self.llm)
         self.session_id = ""
         self.conversation_history: list[dict] = []
+        self._plan_id: str | None = None      # plan 完成的唯一标识
+        self._planning: bool = False           # single-flight 锁
 
         self.event_bus = EventBus()
         self.orchestrator = self._build(use_teammate)
@@ -216,19 +218,22 @@ class ChatAgent:
         if action in invalid_map and state in invalid_map[action]:
             action = "chat"
 
-        # 执行
+        # 执行（所有操作以 _plan_id 为唯一依据）
         if action == "plan":
             return await self._do_plan(user_input)
         elif action == "confirm":
+            if not self._plan_id:
+                return "方案尚未就绪，请稍后再确认"
             return await self._do_execute()
         elif action == "replan":
+            self._plan_id = None
             return await self._do_replan(user_input)
         elif action == "show_plan":
-            if state == "draft":
-                return "正在为您规划行程，请稍等片刻..."
+            if not self._plan_id:
+                return "正在为您规划行程，请稍等..."
             try:
                 s = await self.orchestrator.get_status(self.session_id)
-                return self._show_plan_str(s.nodes) if s.nodes else "正在为您规划行程，请稍等..."
+                return self._show_plan_str(s.nodes) if s.nodes else "方案已就绪"
             except Exception:
                 return "正在为您规划行程，请稍等..."
         elif action == "cancel":
@@ -241,36 +246,38 @@ class ChatAgent:
     # ── 操作 ──
 
     async def _do_plan(self, user_input: str) -> str:
-        # 检查是否已经在规划中（Phase 1 已在后台跑）
-        already_running = False
+        # single-flight lock：已有规划任务则等待完成
+        if self._planning:
+            for _ in range(40):
+                await asyncio.sleep(1)
+                if self._plan_id:
+                    break
+            else:
+                return "规划超时，请重试"
+            s = await self.orchestrator.get_status(self.session_id)
+            return self._show_plan_str(s.nodes) if s.nodes else "方案已就绪"
+
+        self._planning = True
+        self._plan_id = None
+
         if self.session_id:
             try:
-                s = await self.orchestrator.get_status(self.session_id)
-                if s.itinerary_state == "draft":
-                    already_running = True
+                await self.orchestrator.cancel_session(self.session_id)
             except Exception:
                 pass
-
-        if not already_running:
-            # 只有没在规划时才取消重建
-            if self.session_id:
-                try:
-                    await self.orchestrator.cancel_session(self.session_id)
-                except Exception:
-                    pass
-                await asyncio.sleep(0.3)
-            self.session_id = await self.orchestrator.start_session(user_input)
+            await asyncio.sleep(0.3)
+        self.session_id = await self.orchestrator.start_session(user_input)
 
         # 等 Phase 1 完成
         for _ in range(40):
             await asyncio.sleep(1)
             s = await self.orchestrator.get_status(self.session_id)
             if s.itinerary_state in ("pending_confirm", "executing", "completed", "needs_replan"):
-                break
-        else:
-            return "规划超时，请重试"
-        s = await self.orchestrator.get_status(self.session_id)
-        return f"方案做好了：{self._show_plan_str(s.nodes)}"
+                self._plan_id = s.session_id + "_plan"
+                self._planning = False
+                return self._show_plan_str(s.nodes) if s.nodes else "方案已就绪"
+        self._planning = False
+        return "规划超时，请重试"
 
     async def _do_replan(self, user_input: str) -> str:
         sp("\n[重新规划] 根据您的反馈调整方案...")
