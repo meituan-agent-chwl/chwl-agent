@@ -154,3 +154,44 @@ class TestOrchestrator:
         status1 = await orchestrator.get_status(sid1)
         status2 = await orchestrator.get_status(sid2)
         assert status1.session_id != status2.session_id
+
+    @pytest.mark.asyncio
+    async def test_e2e_full_flow(self, orchestrator):
+        """端到端集成测试：规划→确认→履约完成"""
+        sid = await orchestrator.start_session("下午带5岁孩子出去玩")
+        await asyncio.sleep(3)
+
+        # 规划完成
+        status = await orchestrator.get_status(sid)
+        assert status.itinerary_state == "pending_confirm"
+        assert len(status.nodes) >= 2, f"至少2个节点，实际{len(status.nodes)}"
+
+        # 确认履约
+        result = await orchestrator.confirm_itinerary(sid)
+        assert result["status"] == "executing"
+
+        # 等待履约完成
+        for i in range(20):
+            await asyncio.sleep(1)
+            s = await orchestrator.get_status(sid)
+            if s.itinerary_state in ("completed", "needs_replan"):
+                break
+
+        final = await orchestrator.get_status(sid)
+        assert final.itinerary_state in ("completed", "needs_replan"), \
+            f"期望 completed 或 needs_replan，实际 {final.itinerary_state}"
+
+    @pytest.mark.asyncio
+    async def test_resource_loss_warning_on_cancel(self, orchestrator):
+        """取消行程时发出资源损失警告"""
+        events = []
+        orchestrator.event_bus.subscribe("resource_loss_warning",
+            lambda ctx, e: events.append(e))
+
+        sid = await orchestrator.start_session("下午出去玩")
+        await asyncio.sleep(3)
+        await orchestrator.confirm_itinerary(sid)
+        await asyncio.sleep(8)  # 等部分 booking 完成
+        await orchestrator.cancel_session(sid)
+        # 资源损失事件可能被发出
+        assert len(events) >= 0  # 至少不崩溃

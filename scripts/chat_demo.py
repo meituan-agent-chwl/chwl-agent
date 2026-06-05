@@ -60,14 +60,22 @@ class ChatAgent:
 
     改进：
     1. 展示工具调用过程（EventBus 事件实时输出）
-    2. 修复 cancelled 状态竞态条件
+    2. 追问环节：检测缺少信息时先问用户再规划
     3. 偏好更新触发重新规划
     """
+
+    CLARIFY_QUESTIONS = {
+        "start_time": "大概几点出发？比如下午2点",
+        "child_info": "有小朋友吗？几岁了",
+        "elderly_info": "有老人一起吗",
+    }
 
     def __init__(self, use_teammate: bool = False):
         self.llm = LLMClient(api_key=API_KEY)
         self.planner = LLMPlanner(self.llm)
         self.session_id = ""
+        self._pending_input = ""    # 追问前暂存的原始需求
+        self._pending_clarify = []  # 待追问的问题列表
 
         self.event_bus = EventBus()
         self.orchestrator = self._build(use_teammate)
@@ -108,6 +116,7 @@ class ChatAgent:
         self.event_bus.subscribe("execution_complete", self._on_exec_done)
         self.event_bus.subscribe("node_failed", self._on_node_fail)
         self.event_bus.subscribe("replan_ready", self._on_replan_ready)
+        self.event_bus.subscribe("resource_loss_warning", self._on_resource_loss)
 
     # ── 事件处理 ──
 
@@ -149,6 +158,20 @@ class ChatAgent:
     def _on_replan_ready(self, ctx, event):
         sp(f"  [重规划] 调整方案已就绪")
 
+    def _on_resource_loss(self, ctx, event):
+        """资源损失警告"""
+        losses = event["data"].get("losses", [])
+        if losses:
+            sp(f"  [!] 取消将释放以下预约/资格：")
+            for loss in losses:
+                name = loss.get("name", "")
+                ref = loss.get("booking_ref", "")
+                typ = loss.get("type", loss.get("reason", ""))
+                sp(f"      - {name} ({typ}) ref: {ref}")
+        msg = event["data"].get("message", "")
+        if msg:
+            sp(f"  [!] {msg}")
+
     # ── 核心入口 ──
 
     async def start(self):
@@ -167,17 +190,50 @@ class ChatAgent:
 
         # 取消
         if any(k in user_input for k in ("取消", "不去了", "算了", "再见")):
-            await self.orchestrator.cancel_session(self.session_id)
+            if self.session_id:
+                await self.orchestrator.cancel_session(self.session_id)
+            self._pending_input = ""
+            self._pending_clarify = []
             reply = "好的，已取消。下次需要随时找我。"
             self.conversation_history.append({"role": "assistant", "content": reply})
             return reply
 
-        # 获取状态
+        # ── 追问环节：检测缺少信息 ──
+        if self._pending_clarify:
+            # 用户正在回答追问
+            next_q = self._pending_clarify.pop(0)
+            if self._pending_clarify:
+                # 还有更多问题
+                q = self._pending_clarify[0]
+                question = self.CLARIFY_QUESTIONS.get(q, f"请告诉我{q.replace('_',' ')}")
+                return f"好的。{question}"
+            else:
+                # 追问完毕，拼合原始需求+补充信息，开始规划
+                combined = f"{self._pending_input}，{user_input}"
+                self._pending_input = ""
+                return await self._do_plan(combined)
+
+        # ── 首次输入：先检测需不需要追问 ──
         status = await self.orchestrator.get_status(self.session_id)
         state = status.itinerary_state
 
-        # ── DRAFT / INIT：启动新规划 ──
         if state in ("init", "draft"):
+            # 调用 LLM 解析意图，检查是否缺少信息
+            try:
+                ctx_result = await self.planner.handle_user_context({"input": user_input})
+                if ctx_result.get("success"):
+                    missing = ctx_result["data"].get("missing_info", [])
+                    # 过滤出需要追问的项
+                    to_ask = [m for m in missing if m in self.CLARIFY_QUESTIONS]
+                    if to_ask:
+                        self._pending_input = user_input
+                        self._pending_clarify = to_ask
+                        q = to_ask[0]
+                        question = self.CLARIFY_QUESTIONS[q]
+                        return f"好的，{question}"
+            except Exception:
+                pass
+            # 不需要追问 → 直接规划
             return await self._do_plan(user_input)
 
         # ── PENDING_CONFIRM：已有方案，判断下一步 ──
@@ -282,12 +338,13 @@ class ChatAgent:
         return await self._do_plan(user_input)
 
     async def _do_execute(self) -> str:
-        """履约"""
+        """履约（实时展示进度）"""
         try:
             await self.orchestrator.confirm_itinerary(self.session_id)
         except Exception as e:
             return f"预约启动失败: {e}"
-        # 等履约完成
+        sp("  预约进度：")
+        # 等履约完成（事件实时通过 _on_booking 展示）
         for i in range(20):
             await asyncio.sleep(1.5)
             s = await self.orchestrator.get_status(self.session_id)
