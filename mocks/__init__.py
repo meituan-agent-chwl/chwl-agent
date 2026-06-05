@@ -222,6 +222,7 @@ MOCK_ACTIVITIES_FRIENDS = [
 MOCK_RESTAURANTS_FAMILY = [
     {
         "poi_id": "res_fam_001",
+        "category": "restaurant",
         "name": "轻食研究所",
         "open_time": "11:00-21:30",
         "queue_time_min": 90,
@@ -236,6 +237,7 @@ MOCK_RESTAURANTS_FAMILY = [
     },
     {
         "poi_id": "res_fam_002",
+        "category": "restaurant",
         "name": "花园简餐 Bistro",
         "open_time": "10:30-22:00",
         "queue_time_min": 15,
@@ -250,6 +252,7 @@ MOCK_RESTAURANTS_FAMILY = [
     },
     {
         "poi_id": "res_fam_003",
+        "category": "restaurant",
         "name": "亲子轻食餐厅",
         "open_time": "11:00-21:00",
         "queue_time_min": 20,
@@ -264,6 +267,7 @@ MOCK_RESTAURANTS_FAMILY = [
     },
     {
         "poi_id": "res_fam_004",
+        "category": "restaurant",
         "name": "西贝莜面村",
         "open_time": "11:00-21:30",
         "queue_time_min": 25,
@@ -278,6 +282,7 @@ MOCK_RESTAURANTS_FAMILY = [
     },
     {
         "poi_id": "res_fam_005",
+        "category": "restaurant",
         "name": "云海肴云南菜",
         "open_time": "11:00-21:30",
         "queue_time_min": 20,
@@ -292,6 +297,7 @@ MOCK_RESTAURANTS_FAMILY = [
     },
     {
         "poi_id": "res_fam_006",
+        "category": "restaurant",
         "name": "鼎泰丰",
         "open_time": "10:30-22:00",
         "queue_time_min": 35,
@@ -306,6 +312,7 @@ MOCK_RESTAURANTS_FAMILY = [
     },
     {
         "poi_id": "res_fam_007",
+        "category": "restaurant",
         "name": "日昌茶餐厅",
         "open_time": "11:00-22:00",
         "queue_time_min": 15,
@@ -320,6 +327,7 @@ MOCK_RESTAURANTS_FAMILY = [
     },
     {
         "poi_id": "res_fam_008",
+        "category": "restaurant",
         "name": "素虎素食",
         "open_time": "11:00-20:30",
         "queue_time_min": 10,
@@ -334,6 +342,7 @@ MOCK_RESTAURANTS_FAMILY = [
     },
     {
         "poi_id": "res_fam_009",
+        "category": "restaurant",
         "name": "潮汕砂锅粥",
         "open_time": "11:00-23:00",
         "queue_time_min": 10,
@@ -348,6 +357,7 @@ MOCK_RESTAURANTS_FAMILY = [
     },
     {
         "poi_id": "res_fam_010",
+        "category": "restaurant",
         "name": "山茶云南菜",
         "open_time": "11:00-21:30",
         "queue_time_min": 5,
@@ -362,6 +372,7 @@ MOCK_RESTAURANTS_FAMILY = [
     },
     {
         "poi_id": "res_fam_011",
+        "category": "restaurant",
         "name": "和府捞面",
         "open_time": "10:00-22:00",
         "queue_time_min": 8,
@@ -376,6 +387,7 @@ MOCK_RESTAURANTS_FAMILY = [
     },
     {
         "poi_id": "res_fam_012",
+        "category": "restaurant",
         "name": "金鼎轩",
         "open_time": "10:30-22:30",
         "queue_time_min": 30,
@@ -394,6 +406,7 @@ MOCK_RESTAURANTS_FAMILY = [
 MOCK_RESTAURANTS_FRIENDS = [
     {
         "poi_id": "res_frd_001",
+        "category": "restaurant",
         "name": "创意 Bistro 融合菜",
         "open_time": "11:00-23:00",
         "queue_time_min": 30,
@@ -408,6 +421,7 @@ MOCK_RESTAURANTS_FRIENDS = [
     },
     {
         "poi_id": "res_frd_002",
+        "category": "restaurant",
         "name": "热闹烧烤酒场",
         "open_time": "16:00-02:00",
         "queue_time_min": 45,
@@ -422,6 +436,7 @@ MOCK_RESTAURANTS_FRIENDS = [
     },
     {
         "poi_id": "res_frd_003",
+        "category": "restaurant",
         "name": "泰式轻食餐厅",
         "open_time": "11:00-22:00",
         "queue_time_min": 20,
@@ -436,6 +451,7 @@ MOCK_RESTAURANTS_FRIENDS = [
     },
     {
         "poi_id": "res_frd_004",
+        "category": "restaurant",
         "name": "精酿啤酒餐吧",
         "open_time": "17:00-01:00",
         "queue_time_min": 15,
@@ -450,6 +466,7 @@ MOCK_RESTAURANTS_FRIENDS = [
     },
     {
         "poi_id": "res_frd_005",
+        "category": "restaurant",
         "name": "日式居酒屋",
         "open_time": "17:30-23:30",
         "queue_time_min": 25,
@@ -464,6 +481,7 @@ MOCK_RESTAURANTS_FRIENDS = [
     },
     {
         "poi_id": "res_frd_006",
+        "category": "restaurant",
         "name": "川渝火锅",
         "open_time": "11:00-23:00",
         "queue_time_min": 35,
@@ -481,6 +499,7 @@ MOCK_RESTAURANTS_FRIENDS = [
 MOCK_WALK_OPTIONS = [
     {
         "poi_id": "walk_001",
+        "category": "shopping",
         "name": "商场轻松散步区",
         "category": "shopping",
         "open_time": "10:00-22:00",
@@ -492,6 +511,7 @@ MOCK_WALK_OPTIONS = [
     },
     {
         "poi_id": "walk_002",
+        "category": "shopping",
         "name": "滨河公园散步道",
         "category": "park",
         "open_time": "全天",
@@ -503,6 +523,7 @@ MOCK_WALK_OPTIONS = [
     },
     {
         "poi_id": "walk_003",
+        "category": "shopping",
         "name": "夜市小吃街",
         "category": "street_food",
         "open_time": "17:00-23:00",
