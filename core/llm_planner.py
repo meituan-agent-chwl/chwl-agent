@@ -102,22 +102,21 @@ ITINERARY_GENERATION_SYSTEM = """你是一个行程编排师。根据选中的 P
 【绝对规则——必须遵守】
 1. 节点数: 必须 3 个（main_activity + restaurant + optional_activity），缺少无效
 2. POI 合法性: 所有 poi_id 必须来自 valid_poi_ids，严禁编造
-3. 时间窗:
-   - 午餐(11:30-13:30) 晚餐(17:30-19:00)
-   - 主活动 60-120min，餐厅 55-70min，轻活动 30-45min
-   - 相邻节点缓冲 10-15min
-   - 含儿童 20:00 前结束
-4. 输出格式:
-```json
-{"summary":"","total_duration_min":0,"nodes":[{"node_id":"","poi_id":"","poi_name":"","category":"","start_time":"","end_time":"","duration_min":0,"tags":[],"feasibility_note":""}]}
-```
+3. 根据出发时间决定用餐窗口:
+   - 13:00 前出发 → 午餐 11:30-13:30
+   - 13:00-16:00 之间出发 → 用餐时间 = 出发后 90-150min（正常下午餐）
+   - 16:00 后出发 → 晚餐 17:30-19:00
+4. 活动时长: 主活动 60-120min，餐厅 55-70min，轻活动 30-45min
+5. 相邻节点缓冲 10-15min，含儿童 20:00 前结束
 
 【反馈处理——如果 user_feedback 不为空，必须强制改变时间分配】
 用户说「太早」→ 对应节点时间推迟 ≥ 60 分钟
 用户说「太晚」→ 对应节点时间提前 ≥ 60 分钟
 用户说「太赶」→ 缓冲时间增加到 20 分钟
-用户说「太松」→ 减少到 5 分钟
 如果新方案和旧方案时间完全相同，视为无效输出，必须重新生成。
+
+输出格式:
+{"summary":"","total_duration_min":0,"nodes":[{"node_id":"","poi_id":"","poi_name":"","category":"","start_time":"","end_time":"","duration_min":0,"tags":[],"feasibility_note":""}]}
 """
 
 REPLAN_SYSTEM = """你是行程重规划器。必须全量重算行程，禁止局部修改。
