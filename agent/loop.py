@@ -223,6 +223,9 @@ class Orchestrator:
                 "message": "行程合理性存在风险，但仍可继续",
             })
 
+        # 安全保护：如果还处于 draft（规划未完成），先推进到 pending_confirm
+        if ctx.itinerary_sm.state == ItineraryState.DRAFT:
+            await ctx.itinerary_sm.transition_to(ItineraryState.PENDING_CONFIRM, ctx)
         await ctx.itinerary_sm.transition_to(ItineraryState.EXECUTING, ctx)
 
         # 所有节点转入 PENDING
