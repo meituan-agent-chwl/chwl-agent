@@ -17,8 +17,8 @@ ENV_LONGCAT_KEY  = "LONGCAT_API_KEY"
 ENV_LONGCAT_URL  = "LONGCAT_BASE_URL"      # https://api.longcat.chat/openai
 ENV_LONGCAT_MODEL= "LONGCAT_MODEL"
 
-DEFAULT_LONGCAT_URL   = "https://api.longcat.chat/openai"
-DEFAULT_LONGCAT_MODEL = "longcat-chat"
+DEFAULT_LONGCAT_URL   = "https://api.longcat.chat/openai/v1"
+DEFAULT_LONGCAT_MODEL = "LongCat-2.0-Preview"
 
 
 def _provider() -> str:
