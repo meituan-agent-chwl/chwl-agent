@@ -3,7 +3,7 @@ MemoryStore 测试 — 三级记忆仓库
 """
 import time
 import pytest
-from core.memory_store import MemoryStore, MEMORY_TIERS
+from memory.store import MemoryStore, MEMORY_TIERS
 
 
 class TestMemoryStore:

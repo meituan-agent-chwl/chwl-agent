@@ -3,11 +3,11 @@ Background Watch 测试 — 7x24 后台监控引擎
 """
 import asyncio
 import pytest
-from orchestrator.background_watch import (
+from runtime.background_watch import (
     BackgroundWatch, WatchConfig, WatchType, WatchAlert,
 )
-from orchestrator.event_bus import EventBus
-from core.tool_registry import ToolRegistry
+from runtime.event_bus import EventBus
+from tools.registry import ToolRegistry
 
 
 @pytest.fixture

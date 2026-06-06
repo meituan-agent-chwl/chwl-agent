@@ -4,16 +4,16 @@ Replanning 增强测试 — 多候选替换 + 用户选择
 import asyncio
 import pytest
 import pytest_asyncio
-from core.state_machine import ItineraryState, NodeState, create_node_fsm
-from core.models import NodeCategory
-from core.tool_registry import ToolRegistry
+from runtime.state_machine import ItineraryState, NodeState, create_node_fsm
+from schemas.models import NodeCategory
+from tools.registry import ToolRegistry
 from mocks import MockBackend
-from orchestrator.orchestrator import Orchestrator
+from agent.loop import Orchestrator
 
 
 async def make_failed_node(ctx, node_id, poi_id, poi_name, category=NodeCategory.RESTAURANT):
     """创建节点并通过状态机切换到 FAILED 状态"""
-    from core.models import ItineraryNode, ItineraryData
+    from schemas.models import ItineraryNode, ItineraryData
 
     node = ItineraryNode(
         node_id=node_id, poi_id=poi_id, poi_name=poi_name,
@@ -65,7 +65,7 @@ class TestReplanEnhanced:
              "rating": 4.8, "queue_time_min": 45, "distance_km": 0.5},
         ]
 
-        from core.models import ItineraryNode
+        from schemas.models import ItineraryNode
         node = ItineraryNode(node_id="n1", poi_id="r_old", poi_name="旧餐厅",
                              category=NodeCategory.RESTAURANT)
 
@@ -77,7 +77,7 @@ class TestReplanEnhanced:
         """每个替代候选包含推荐理由"""
         orch, sid, _ = setup
         ctx = orch._get_ctx(sid)
-        from core.models import ItineraryNode
+        from schemas.models import ItineraryNode
 
         ctx.raw_candidates = [
             {"poi_id": "r1", "name": "轻食餐厅", "category": "restaurant",

@@ -2,7 +2,7 @@
 Tool Registry 测试 — 调用、重试、熔断、并行
 """
 import pytest
-from core.tool_registry import ToolRegistry, ToolDefinition
+from tools.registry import ToolRegistry, ToolDefinition
 
 
 class TestToolRegistry:

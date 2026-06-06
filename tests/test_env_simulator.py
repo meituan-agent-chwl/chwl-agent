@@ -5,7 +5,7 @@ import asyncio
 import pytest
 from mocks.env_simulator import EnvSimulator
 from mocks import MockBackend
-from orchestrator.event_bus import EventBus
+from runtime.event_bus import EventBus
 
 
 class TestEnvSimulator:

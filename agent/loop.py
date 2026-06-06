@@ -23,22 +23,22 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from core.state_machine import (
+from runtime.state_machine import (
     ItineraryState, NodeState,
     create_itinerary_fsm, create_node_fsm,
     StateChangeEvent, InvalidTransitionError,
 )
-from core.models import (
+from schemas.models import (
     ItineraryData, ItineraryNode, NodeCategory, ResourceType,
     UserContext, UserSentiment, ItineraryModification,
     SessionStatus, NodeStatus, ConfirmationRequest as ConfRequestModel,
     BookingAction, ModeType, SceneType, ConflictInfo,
 )
-from core.tool_registry import ToolRegistry
-from core.memory_store import MemoryStore
-from orchestrator.event_bus import EventBus
-from orchestrator.confirmation_gateway import ConfirmationGateway
-from orchestrator.background_watch import BackgroundWatch, WatchConfig, WatchType
+from tools.registry import ToolRegistry
+from memory.store import MemoryStore
+from runtime.event_bus import EventBus
+from runtime.confirmation_gateway import ConfirmationGateway
+from runtime.background_watch import BackgroundWatch, WatchConfig, WatchType
 
 logger = logging.getLogger(__name__)
 

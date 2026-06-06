@@ -48,8 +48,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Optional
 
-from core.tool_registry import ToolRegistry
-from orchestrator.event_bus import EventBus
+from tools.registry import ToolRegistry
+from runtime.event_bus import EventBus
 
 logger = logging.getLogger(__name__)
 

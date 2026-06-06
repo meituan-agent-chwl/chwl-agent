@@ -2,7 +2,7 @@
 状态机单元测试 — 验证 ItineraryFSM 和 NodeFSM 的所有合法/非法转换
 """
 import pytest
-from core.state_machine import (
+from runtime.state_machine import (
     ItineraryState, NodeState,
     create_itinerary_fsm, create_node_fsm,
     InvalidTransitionError,
@@ -17,7 +17,7 @@ class TestItineraryFSM:
 
     def test_init_to_draft(self, itinerary_fsm, sample_context):
         """用户输入 → DRAFT"""
-        from core.state_machine import StateChangeEvent
+        from runtime.state_machine import StateChangeEvent
         events = []
         itinerary_fsm.on_change(lambda e: events.append(e))
 

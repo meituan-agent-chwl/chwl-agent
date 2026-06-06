@@ -27,7 +27,7 @@ from typing import Any, Optional, Type
 from pydantic import BaseModel, ValidationError
 
 from schemas import ALL_SCHEMAS, SCHEMA_TYPE_MAP
-from core.fallback_repair import FallbackRepair
+from execution.repair import FallbackRepair
 
 logger = logging.getLogger(__name__)
 

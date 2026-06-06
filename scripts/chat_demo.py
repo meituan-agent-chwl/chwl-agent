@@ -22,14 +22,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core.llm_client import LLMClient
-from core.llm_planner import LLMPlanner
-from core.tool_registry import ToolRegistry
-from core.models import UserSentiment
+from agent.llm_client import LLMClient
+from planner.llm_planner import LLMPlanner
+from tools.registry import ToolRegistry
+from schemas.models import UserSentiment
 from mocks import MockBackend
 from mocks.teammate_adapter import TeammateAPIAdapter
-from orchestrator.orchestrator import Orchestrator
-from orchestrator.event_bus import EventBus
+from agent.loop import Orchestrator
+from runtime.event_bus import EventBus
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
 

@@ -8,8 +8,8 @@ import pytest
 import json
 import os
 
-from core.llm_client import LLMClient
-from core.llm_planner import LLMPlanner
+from agent.llm_client import LLMClient
+from planner.llm_planner import LLMPlanner
 
 API_KEY = os.environ.get("DEEPSEEK_API_KEY", "sk-67937130fddf4be086e73e7b2f6d293c")
 SKIP_REASON = "DeepSeek API 不可用或未配置"

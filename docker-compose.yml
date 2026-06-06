@@ -1,0 +1,24 @@
+version: "3.8"
+services:
+  mock_api:
+    build: ./mock_api
+    ports:
+      - "8000:8000"
+
+  backend:
+    build: .
+    ports:
+      - "8001:8001"
+    environment:
+      - LLM_PROVIDER=${LLM_PROVIDER:-deepseek}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - MOCK_API_URL=http://mock_api:8000
+    depends_on:
+      - mock_api
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend

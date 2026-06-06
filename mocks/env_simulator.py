@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from mocks import MockBackend
-from orchestrator.event_bus import EventBus
+from runtime.event_bus import EventBus
 
 logger = logging.getLogger(__name__)
 

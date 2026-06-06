@@ -1,13 +1,13 @@
 """Pytest 共享 fixtures"""
 import pytest
 
-from core.tool_registry import ToolRegistry
-from core.state_machine import (
+from tools.registry import ToolRegistry
+from runtime.state_machine import (
     ItineraryState, NodeState,
     create_itinerary_fsm, create_node_fsm,
 )
 from mocks import MockBackend
-from orchestrator.orchestrator import Orchestrator
+from agent.loop import Orchestrator
 
 
 @pytest.fixture
@@ -48,8 +48,8 @@ def node_fsm():
 
 @pytest.fixture
 def sample_context():
-    from core.models import ItineraryData, ItineraryNode
-    from orchestrator.orchestrator import ExecutionContext
+    from schemas.models import ItineraryData, ItineraryNode
+    from agent.loop import ExecutionContext
     ctx = ExecutionContext(session_id="test-session")
     ctx.itinerary = ItineraryData(
         itinerary_id="test-iti",

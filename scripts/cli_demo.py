@@ -27,12 +27,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # 项目根目录
 
-from core.tool_registry import ToolRegistry
-from core.models import ItineraryModification, UserSentiment
+from tools.registry import ToolRegistry
+from schemas.models import ItineraryModification, UserSentiment
 from mocks import MockBackend
 from mocks.env_simulator import EnvSimulator
-from orchestrator.orchestrator import Orchestrator
-from orchestrator.event_bus import EventBus
+from agent.loop import Orchestrator
+from runtime.event_bus import EventBus
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
 

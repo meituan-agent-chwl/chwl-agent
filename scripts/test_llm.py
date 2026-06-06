@@ -3,11 +3,11 @@ import asyncio, sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 os.environ["PYTHONIOENCODING"] = "utf-8"
 
-from core.llm_client import LLMClient
-from core.llm_planner import LLMPlanner
-from core.tool_registry import ToolRegistry
+from agent.llm_client import LLMClient
+from planner.llm_planner import LLMPlanner
+from tools.registry import ToolRegistry
 from mocks import MockBackend
-from orchestrator.orchestrator import Orchestrator
+from agent.loop import Orchestrator
 
 async def test():
     llm = LLMClient(api_key=os.environ.get("DEEPSEEK_API_KEY", "sk-67937130fddf4be086e73e7b2f6d293c"))

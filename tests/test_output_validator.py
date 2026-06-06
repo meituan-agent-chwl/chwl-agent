@@ -2,8 +2,8 @@
 Output Validator + Fallback Repair 测试
 """
 import pytest
-from core.output_validator import OutputValidator, SchemaValidationResult
-from core.fallback_repair import FallbackRepair
+from execution.validator import OutputValidator, SchemaValidationResult
+from execution.repair import FallbackRepair
 from schemas import ItineraryPlanSchema, RiskModalSchema
 
 

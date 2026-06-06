@@ -6,8 +6,8 @@ Orchestrator 集成测试
 import asyncio
 import pytest
 
-from core.state_machine import ItineraryState, NodeState
-from core.models import ItineraryModification, UserSentiment
+from runtime.state_machine import ItineraryState, NodeState
+from schemas.models import ItineraryModification, UserSentiment
 
 
 class TestOrchestrator:
