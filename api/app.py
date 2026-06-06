@@ -20,7 +20,7 @@ from session_manager import get_or_create_agent, destroy_agent
 from sse_adapter import create_sse_session, _fmt_node, CATEGORY_ICONS
 from mocks import MockBackend
 
-logging.basicConfig(level=logging.WARNING)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="CHWL Agent", version="3.0.0")
