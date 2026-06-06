@@ -163,6 +163,10 @@ class ChatAgent:
         if tm:
             h = int(tm.group(1) or tm.group(3) or "14")
             m = int(tm.group(2)) if tm.group(2) else 0
+            # 修复：口语"2点"=下午2点不是凌晨2点，小时<7且无"上午/早"语境时+12
+            has_am_context = any(k in text for k in ("上午", "早上", "早起", "一早"))
+            if h < 7 and not has_am_context:
+                h += 12
             start_time = f"{h:02d}:{m:02d}"
         return {"success": True, "data": {
             "scene": scene, "time_range": "afternoon", "distance_constraint": "nearby",

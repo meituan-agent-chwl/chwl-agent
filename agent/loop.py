@@ -539,8 +539,12 @@ class Orchestrator:
                 ItineraryState.PENDING_CONFIRM, ctx)
 
             # 通知外部
+            # 收集可替换的候选 POI（排除已选中的节点）
+            used_ids = {n.poi_id for n in ctx.itinerary.nodes if n.poi_id}
+            alternatives = [c for c in ctx.raw_candidates if c.get("poi_id") not in used_ids]
             await self.event_bus.emit("plan_complete", ctx, {
                 "itinerary": _d(ctx.itinerary),
+                "alternatives": alternatives[:20],  # 最多传 20 个
             })
             logger.info("[Phase1] %s 规划完成，%d 个节点",
                         ctx.session_id[:12], len(ctx.itinerary.nodes))

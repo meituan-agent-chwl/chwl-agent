@@ -219,6 +219,7 @@ export default function ChatPage({ sessionId, onMonitorUpdate, onItineraryUpdate
           const iid = append({
             role: 'agent', type: 'itinerary',
             nodes: evt.nodes || [], summary: evt.summary || '',
+            alternatives: evt.alternatives || [],
           })
           setItineraryMsgId(iid)
           if (onItineraryUpdate) onItineraryUpdate(evt.nodes || [])
@@ -453,6 +454,23 @@ export default function ChatPage({ sessionId, onMonitorUpdate, onItineraryUpdate
     }
   }, [sessionId, itineraryMsgId, update, append])
 
+  // ── Node replace (select alternative) ────────────────────────────
+
+  const handleReplaceNode = useCallback(async (nodeId, newPoiId) => {
+    if (!sessionId || !itineraryMsgId) return
+    const result = await api.nodeReplace(sessionId, nodeId, newPoiId)
+    if (result.success && result.nodes) {
+      update(itineraryMsgId, m => ({
+        ...m,
+        nodes: result.nodes,
+      }))
+      if (onItineraryUpdate) onItineraryUpdate(result.nodes)
+      append({ role: 'agent', type: 'text', content: '✅ 已替换，这是更新后的行程 👆' })
+    } else {
+      append({ role: 'agent', type: 'text', content: `替换失败：${result.error || '未知错误'}` })
+    }
+  }, [sessionId, itineraryMsgId, update, append, onItineraryUpdate])
+
   // User confirmed soft-lock warning → force execute
   const handleSoftLockConfirm = useCallback(async (nodeId, action, requestId) => {
     if (!sessionId) return
@@ -575,6 +593,7 @@ export default function ChatPage({ sessionId, onMonitorUpdate, onItineraryUpdate
             key={msg.id}
             msg={msg}
             onNodeAction={handleNodeAction}
+            onSelectAlt={handleReplaceNode}
             onTransitChange={onTransitChange}
             onExceptionConfirm={confirmException}
             onExceptionDismiss={dismissException}

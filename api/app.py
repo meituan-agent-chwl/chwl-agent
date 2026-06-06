@@ -179,6 +179,48 @@ async def node_action(session_id: str, request: Request):
     except:
         return {"nodes": []}
 
+@app.post("/agent/{session_id}/node/replace")
+async def node_replace(session_id: str, request: Request):
+    """替换行程中的某个节点为新的 POI"""
+    try:
+        body = await request.json()
+        node_id = body.get("node_id", "")
+        new_poi_id = body.get("new_poi_id", "")
+        if not node_id or not new_poi_id:
+            return {"success": False, "error": "缺少 node_id 或 new_poi_id"}
+        agent = get_or_create_agent(session_id)
+        # 从 raw_candidates 中找新 POI 的数据
+        ctx = agent.orchestrator.sessions.get(session_id)
+        new_resource = None
+        if ctx and hasattr(ctx, "raw_candidates"):
+            for c in ctx.raw_candidates:
+                if c.get("poi_id") == new_poi_id:
+                    new_resource = {
+                        "poi_id": new_poi_id,
+                        "poi_name": c.get("name", ""),
+                        "address": c.get("address", ""),
+                        "category": c.get("category", ""),
+                        "duration_min": c.get("estimated_duration_min", 60),
+                        "tags": c.get("tags", []),
+                        "rating": c.get("rating", 0),
+                        "distance_km": c.get("distance_km", 0),
+                        "ticket_price": c.get("ticket_price", c.get("avg_price", 0)),
+                    }
+                    break
+        if new_resource:
+            from schemas.models import ItineraryModification
+            mod = ItineraryModification(type="replace", node_id=node_id, new_resource=new_resource)
+            await agent.orchestrator.modify_itinerary(session_id, mod)
+        # 返回更新后的节点
+        s = await agent.orchestrator.get_status(session_id)
+        return {"success": True, "nodes": [{"id":n.get("node_id",""),"poiId":n.get("poi_id",""),"name":n.get("poi_name",""),
+            "type":n.get("category","activity"),"startTime":n.get("scheduled_start","") or n.get("start_time",""),
+            "endTime":n.get("scheduled_end","") or n.get("end_time",""),"duration":n.get("duration_min",60),
+            "status":n.get("status","planned"),"tags":n.get("tags",[]),
+            "address":n.get("address",""),"rating":n.get("rating",0)} for n in s.nodes]}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 @app.post("/agent/{session_id}/node/checkin")
 async def node_checkin(session_id: str, request: Request):
     return {"status": "checked_in"}

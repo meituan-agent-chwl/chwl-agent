@@ -85,27 +85,13 @@ function InlineTransitBar({ transit, isFirst, onModeChange }) {
   )
 }
 
-const ALT_POOL = {
-  family: [
-    { icon: '📚', name: '彩虹树绘本馆',   sub: '望京 · 1.6km', queue: '需预约',    rating: 4.6 },
-    { icon: '🔬', name: '儿童科学体验馆', sub: '朝阳 · 3.1km', queue: '约10分钟',  rating: 4.5 },
-    { icon: '🎪', name: '汤姆猫亲子乐园', sub: '易事达 · 2.8km', queue: '无需排队', rating: 4.7 },
-  ],
-  friends: [
-    { icon: '🎨', name: '今日美术馆',     sub: '朝阳 · 2.1km', queue: '无需等待',  rating: 4.8 },
-    { icon: '🎵', name: 'MAO LiveHouse',  sub: '望京 · 1.8km', queue: '无需等待',  rating: 4.7 },
-    { icon: '🎲', name: '超级桌游社',     sub: '望京SOHO · 1.2km', queue: '可预约', rating: 4.6 },
-  ],
-  restaurant: [
-    { icon: '🥗', name: '亲子轻食餐厅',  sub: '同商圈 · 0.8km', queue: '约15分钟', rating: 4.5 },
-    { icon: '🍜', name: '花园简餐 Bistro', sub: '望京 · 1.2km',  queue: '约12分钟', rating: 4.6 },
-    { icon: '🍱', name: '粤小厨家庭餐',  sub: '望京 · 1.5km',   queue: '约20分钟', rating: 4.4 },
-  ],
-}
-
-function NodeCard({ node, idx, onAction }) {
-  const alts = node.type === 'restaurant' ? ALT_POOL.restaurant
-             : ALT_POOL.family
+function NodeCard({ node, idx, onAction, onSelectAlt, alternatives }) {
+  // 使用真实 alternatives，按 category 筛选（restaurant → 只显示餐厅，其他显示活动）
+  const altList = (alternatives || []).filter(a =>
+    node.type === 'restaurant'
+      ? a.category === 'restaurant'
+      : a.category !== 'restaurant'
+  ).slice(0, 5)
 
   const isPinned    = node.user_pinned || node.pinned
   const isCompleted = node.completed_lock
@@ -194,14 +180,20 @@ function NodeCard({ node, idx, onAction }) {
         {node._showAlts && (
           <div className="alt-panel">
             <div className="alt-panel-title">附近备选方案</div>
-            {alts.map((a, i) => (
-              <div key={i} className="alt-item" onClick={() => onAction(node.id, 'replace')}>
-                <span className="alt-icon">{a.icon}</span>
+            {altList.length === 0 && (
+              <div className="alt-item disabled" style={{ opacity: 0.5, cursor: 'default' }}>
+                暂无其他备选
+              </div>
+            )}
+            {altList.map((a, i) => (
+              <div key={a.poiId || i} className="alt-item"
+                   onClick={() => onSelectAlt?.(node.id, a.poiId)}>
+                <span className="alt-icon">{a.icon || '📍'}</span>
                 <div className="alt-info">
                   <div className="alt-name">{a.name}</div>
-                  <div className="alt-meta">{a.sub} · {a.queue}</div>
+                  <div className="alt-meta">{a.sub || `${(a.distanceKm || 0).toFixed(1)}km`} · {a.queueText || '可预约'}</div>
                 </div>
-                <div className="alt-rating">⭐ {a.rating}</div>
+                <div className="alt-rating">{a.rating ? `⭐ ${a.rating}` : ''}</div>
               </div>
             ))}
           </div>
@@ -211,7 +203,7 @@ function NodeCard({ node, idx, onAction }) {
   )
 }
 
-export default function ItineraryCards({ nodes, summary, onNodeAction, onTransitChange }) {
+export default function ItineraryCards({ nodes, summary, onNodeAction, onSelectAlt, alternatives, onTransitChange }) {
   if (!nodes?.length) return null
 
   return (
@@ -234,7 +226,7 @@ export default function ItineraryCards({ nodes, summary, onNodeAction, onTransit
                   : undefined}
               />
             )}
-            <NodeCard node={node} idx={i} onAction={onNodeAction} />
+            <NodeCard node={node} idx={i} onAction={onNodeAction} onSelectAlt={onSelectAlt} alternatives={alternatives} />
           </React.Fragment>
         ))}
       </div>

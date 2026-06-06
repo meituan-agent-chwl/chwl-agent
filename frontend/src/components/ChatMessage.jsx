@@ -317,7 +317,7 @@ function MonitorAlertBubble({ content, severity }) {
 }
 
 // ── Main dispatcher ───────────────────────────────────────────────
-export default function ChatMessage({ msg, onNodeAction, onTransitChange, onExceptionConfirm, onExceptionDismiss, onReportSelect, onSoftLockConfirm, onSoftLockDismiss }) {
+export default function ChatMessage({ msg, onNodeAction, onSelectAlt, onTransitChange, onExceptionConfirm, onExceptionDismiss, onReportSelect, onSoftLockConfirm, onSoftLockDismiss }) {
   if (msg.role === 'user') return <UserBubble content={msg.content} />
 
   switch (msg.type) {
@@ -330,7 +330,9 @@ export default function ChatMessage({ msg, onNodeAction, onTransitChange, onExce
         <ItineraryCards
           nodes={msg.nodes}
           summary={msg.summary}
+          alternatives={msg.alternatives}
           onNodeAction={onNodeAction}
+          onSelectAlt={onSelectAlt}
           onTransitChange={onTransitChange}
         />
       </AgentWrap>

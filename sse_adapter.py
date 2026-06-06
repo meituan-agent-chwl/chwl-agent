@@ -104,7 +104,25 @@ def create_sse_session(event_bus: EventBus, session_id: str):
             itin = data["itinerary"]
             nodes = itin.get("nodes", [])
             fmt_nodes = [_fmt_node(n) for n in nodes]
-            queue.put_nowait({"type": "itinerary_ready", "nodes": fmt_nodes, "summary": itin.get("summary", "")})
+            # 转发可替换候选 POI
+            alts_raw = data.get("alternatives", [])
+            fmt_alts = [{
+                "poiId": a.get("poi_id", ""),
+                "name": a.get("name", ""),
+                "category": a.get("category", ""),
+                "icon": CATEGORY_ICONS.get(a.get("category", ""), "📍"),
+                "sub": a.get("address", ""),
+                "distanceKm": a.get("distance_km", 0),
+                "rating": a.get("rating", 0),
+                "queueText": f'排队{a.get("queue_time_min", 0)}分钟' if a.get("queue_time_min", 0) > 0 else "无需排队",
+                "tags": a.get("tags", []),
+            } for a in alts_raw if a.get("poi_id")]
+            queue.put_nowait({
+                "type": "itinerary_ready",
+                "nodes": fmt_nodes,
+                "summary": itin.get("summary", ""),
+                "alternatives": fmt_alts,
+            })
             return
 
         elif sse_type == "fulfill_item":
