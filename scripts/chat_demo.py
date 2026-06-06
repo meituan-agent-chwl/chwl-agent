@@ -102,13 +102,13 @@ def sp(text: str):
 class ChatAgent:
     """LLM 驱动的 Agent 对话循环"""
 
-    def __init__(self, use_teammate: bool = False):
+    def __init__(self, session_id: str = "", use_teammate: bool = False):
         self.llm = LLMClient(api_key=API_KEY)
         self.planner = LLMPlanner(self.llm)
-        self.session_id = ""
+        self.session_id = session_id
         self.conversation_history: list[dict] = []
-        self._plan_id: str | None = None      # plan 完成的唯一标识
-        self._planning: bool = False           # single-flight 锁
+        self._plan_id: str | None = None
+        self._planning: bool = False
 
         self.event_bus = EventBus()
         self.orchestrator = self._build(use_teammate)
