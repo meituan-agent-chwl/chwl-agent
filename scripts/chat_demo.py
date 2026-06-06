@@ -473,9 +473,14 @@ class ChatAgent:
                         self.conversation_history.append(
                             {"role": "assistant", "content": msg})
                         return msg
-                    # 无追问 → 信息已完整，直接规划
-            except Exception:
-                pass
+                    # 无追问 → 信息已完整，跳过常规 routing，直接规划
+                    import logging
+                    logging.getLogger(__name__).info('[Agent] clarify 无追问，直接规划')
+                    self.conversation_history.append(
+                        {'role': 'assistant', 'content': msg or '好的，开始安排'})
+                    return await self._do_plan(user_input)
+            except Exception as e:
+                logging.getLogger(__name__).warning('[Agent] clarify 异常: %s', e)
 
         # 首次输入 → 创建 session（不主动规划，等 LLM 决定 action）
         if not self.session_id:
