@@ -222,12 +222,15 @@ class ChatAgent:
         except Exception:
             state = "none"
 
-        # 状态守卫层：非法 action 降级为 chat
+        # 状态守卫层
+        # 当 state=none（无会话）时，chat→plan 强制路由，不回复废话
+        if state in ("none", "draft") and action == "chat":
+            action = "plan"
         invalid_map = {
             "confirm": ["init", "draft", "none", "cancelled"],
             "replan": ["init", "none", "cancelled"],
             "cancel": ["cancelled", "none"],
-            "plan": ["init", "none", "executing", "completed"],
+            "plan": ["init", "executing", "completed"],
             "show_plan": ["init", "none"],
         }
         if action in invalid_map and state in invalid_map[action]:
