@@ -96,8 +96,8 @@ async def chat(session_id: str, request: Request):
         yield {"type": "status", "id": 2, "text": "搜索附近活动", "status": "loading"}
         yield {"type": "cot_step", "text": "开始规划下午行程..."}
 
-        # Wait for Phase 1
-        for i in range(30):
+        # Wait for Phase 1（15s 超时）
+        for i in range(15):
             await asyncio.sleep(1)
             s = await orchestrator.get_status(sid)
             if s.itinerary_state == "pending_confirm":

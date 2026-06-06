@@ -41,7 +41,7 @@ class LLMClient:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model = model
-        self.timeout_s = timeout_s
+        self.timeout_s = min(timeout_s, 8)  # Demo 环境快速失败
 
     async def chat(
         self,
@@ -51,6 +51,20 @@ class LLMClient:
         temperature: float = 0.3,
         max_tokens: int = 4096,
     ) -> str:
+        # 快速连通性检查（失败时不阻塞）
+        if not self._pinged:
+            self._pinged = True
+            self._reachable = await self._ping()
+        if not self._reachable:
+            raise ConnectionError("DeepSeek API 不可达")
+
+    async def _ping(self) -> bool:
+        try:
+            async with httpx.AsyncClient(timeout=3, trust_env=False) as c:
+                r = await c.get("https://api.deepseek.com")
+                return r.status_code < 500
+        except Exception:
+            return False
         """
         调用 LLM 获取回复。
 
@@ -79,6 +93,9 @@ class LLMClient:
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout_s, trust_env=False) as client:
+                if not self._pinged:
+                    self._pinged = True
+                    self._reachable = True
                 resp = await client.post(
                     f"{self.base_url}/chat/completions",
                     headers=headers,
