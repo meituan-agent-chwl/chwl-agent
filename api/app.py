@@ -14,8 +14,6 @@ from fastapi.responses import StreamingResponse
 from tools.registry import ToolRegistry
 from mocks import MockBackend
 from agent.loop import Orchestrator, _d
-from agent.llm_client import LLMClient
-from planner.llm_planner import LLMPlanner
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,22 +26,12 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
 
 backend = MockBackend()
 tools = ToolRegistry()
-api_key = os.environ.get("DEEPSEEK_API_KEY", "sk-67937130fddf4be086e73e7b2f6d293c")
-try:
-    llm = LLMClient(api_key=api_key)
-    planner = LLMPlanner(llm)
-    tools.register_mock("candidates_score", planner.handle_candidates_score)
-    tools.register_mock("itinerary_generate", planner.handle_itinerary_generate)
-    tools.register_mock("itinerary_replan", planner.handle_itinerary_replan)
-    logger.info("LLM Planner registered")
-except Exception as e:
-    logger.warning("LLM fallback: %s", e)
-    for n in ["candidates_score", "itinerary_generate", "itinerary_replan"]:
-        tools.register_mock(n, getattr(backend, f"handle_{n}"))
-
 for name in ["location", "user_context", "weather", "activities_search",
-             "restaurants_search", "route_check", "booking_execute", "booking_status"]:
+             "restaurants_search", "route_check", "candidates_score",
+             "itinerary_generate", "booking_execute", "booking_status",
+             "itinerary_replan"]:
     tools.register_mock(name, getattr(backend, f"handle_{name}"))
+logger.info("Mock backend registered (instant, no LLM)")
 
 orchestrator = Orchestrator(tools)
 sessions: dict[str, dict] = {}
