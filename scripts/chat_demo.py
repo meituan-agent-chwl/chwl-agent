@@ -123,6 +123,8 @@ class ChatAgent:
         self.event_bus = EventBus()
         self.orchestrator = self._build(use_teammate)
         self._subscribe_events()
+        # 追问状态：存储 inferred 对象，跨轮次维护
+        self._clarify_state = None
 
     def _build(self, use_teammate: bool) -> Orchestrator:
         tools = ToolRegistry()
