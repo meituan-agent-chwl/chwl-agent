@@ -37,10 +37,10 @@ orchestrator = Orchestrator(tools)
 plan_errors: dict[str, str] = {}
 
 # Capture plan_failed events for diagnostic
-@orchestrator.event_bus.subscribe("plan_failed")
 async def on_plan_failed(ctx, event):
     plan_errors[event.get("session_id", "")] = str(event.get("data", {}).get("error", ""))
     logger.error("plan_failed: %s %s", event.get("session_id","")[:8], event.get("data",{}))
+orchestrator.event_bus.subscribe("plan_failed", on_plan_failed)
 sessions: dict[str, dict] = {}
 
 # ─── Helpers ───────────────────────────────────────────────
