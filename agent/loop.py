@@ -412,6 +412,9 @@ class Orchestrator:
                         merged["rating"] = c.get("rating", 0)
                         merged["tags"] = c.get("tags", [])
                         merged["estimated_duration_min"] = c.get("estimated_duration_min", 60)
+                        merged["address"] = c.get("address", "")
+                        merged["avg_price"] = c.get("avg_price", 0)
+                        merged["ticket_price"] = c.get("ticket_price", 0)
                         ctx.scored_candidates.append(merged)
                     else:
                         ctx.scored_candidates.append(c)
