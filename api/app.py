@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from session_manager import get_or_create_agent, destroy_agent
-from sse_adapter import _fmt_node, CATEGORY_ICONS
+from sse_adapter import create_sse_session, _fmt_node, CATEGORY_ICONS
 from mocks import MockBackend
 
 logging.basicConfig(level=logging.WARNING)
