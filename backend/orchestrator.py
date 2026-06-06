@@ -6,7 +6,7 @@ import random
 import string
 import time
 import uuid
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
 from . import skills, tools
 from .background_watch import BackgroundWatch, build_watch_configs_for_itinerary
@@ -514,7 +514,7 @@ class Orchestrator:
         )
         return True, f"好的，已删除「{target.get('name', '该地点')}」。"
 
-    def _find_node_from_message(self, itinerary: list[dict], text: str) -> dict | None:
+    def _find_node_from_message(self, itinerary: list[dict], text: str) -> Optional[dict]:
         restaurant_words = ("餐厅", "吃饭", "用餐", "餐食", "午餐", "晚餐", "饭店", "饭馆")
         activity_words = ("活动", "景点", "地点", "游玩", "公园", "商场", "展览", "桌游", "密室", "剧本杀")
         light_words = ("轻活动", "收尾", "最后")
@@ -742,7 +742,7 @@ class Orchestrator:
         return True, f"可以，已按你的新想法加上餐厅：{restaurant_node.get('name')}。"
 
     @staticmethod
-    def _parse_node_time(value: str | None) -> int:
+    def _parse_node_time(value: Optional[str]) -> int:
         try:
             hour, minute = (value or "00:00").split(":")[:2]
             return int(hour) * 60 + int(minute)

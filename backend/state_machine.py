@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Generic, TypeVar
+from typing import Any, Callable, Generic, TypeVar, Optional
 
 
 class ItineraryState(str, Enum):
@@ -68,7 +68,7 @@ class TransitionResult:
     from_state: str
     requested_state: str
     to_state: str
-    fallback_state: str | None = None
+    fallback_state: Optional[str] = None
     reason: str = ""
     warnings: list[str] = field(default_factory=list)
 
