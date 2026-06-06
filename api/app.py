@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from session_manager import get_or_create_agent, destroy_agent
-from sse_adapter import create_sse_session
+from sse_adapter import _fmt_node, CATEGORY_ICONS
 from mocks import MockBackend
 
 logging.basicConfig(level=logging.WARNING)
@@ -211,13 +211,14 @@ async def node_replace(session_id: str, request: Request):
             from schemas.models import ItineraryModification
             mod = ItineraryModification(type="replace", node_id=node_id, new_resource=new_resource)
             await agent.orchestrator.modify_itinerary(session_id, mod)
-        # 返回更新后的节点
-        s = await agent.orchestrator.get_status(session_id)
-        return {"success": True, "nodes": [{"id":n.get("node_id",""),"poiId":n.get("poi_id",""),"name":n.get("poi_name",""),
-            "type":n.get("category","activity"),"startTime":n.get("scheduled_start","") or n.get("start_time",""),
-            "endTime":n.get("scheduled_end","") or n.get("end_time",""),"duration":n.get("duration_min",60),
-            "status":n.get("status","planned"),"tags":n.get("tags",[]),
-            "address":n.get("address",""),"rating":n.get("rating",0)} for n in s.nodes]}
+        # 返回更新后的节点（使用 _fmt_node 格式，保持与 SSE adapter 一致）
+        if ctx and ctx.itinerary:
+            fmt_nodes = []
+            for node_m in ctx.itinerary.nodes:
+                nd = node_m.model_dump() if hasattr(node_m, "model_dump") else node_m.dict()
+                fmt_nodes.append(_fmt_node(nd))
+            return {"success": True, "nodes": fmt_nodes}
+        return {"success": True, "nodes": []}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
