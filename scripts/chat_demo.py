@@ -230,27 +230,31 @@ class ChatAgent:
         return "，".join(p for p in parts if p)
 
     async def _mock_itinerary_generate(self, payload: dict) -> dict:
-        """规则行程编排，不调 LLM"""
+        """规则行程编排 — 严格对照 PROMPT_REDESIGN.md Prompt 4 六步规则"""
         selected = payload.get("selected_nodes", {})
         departure = payload.get("departure_time", "14:00")
         scene = payload.get("scene", "family")
         user_feedback = payload.get("user_feedback", "")
         has_child = any(k in user_feedback for k in ("孩子", "小孩", "儿童", "宝宝"))
         nodes = []
-        cur_h, cur_m = map(int, departure.split(":") if ":" in departure else ("14", "00"))
-        cur = cur_h * 60 + cur_m
+        dh, dm = map(int, departure.split(":") if ":" in departure else ("14", "00"))
+        dep = dh * 60 + dm
+        buf = 15  # Step 3: 交通缓冲 ≥ 15min（所有场景强制执行）
 
-        def slot(dur: int) -> tuple[int, int, int]:
-            nonlocal cur
-            start = cur
-            end = cur + dur
-            cur = end + 15  # 缓冲 15min
-            return start, end, dur
+        # Step 1: 出发时间 → 确定用餐模式
+        if dep >= 13 * 60:                     # >= 13:00 → 晚餐模式
+            meal_mode = "dinner"
+            rest_window = (17 * 60 + 30, 19 * 60 + 30)  # 17:30–19:30
+        elif dep <= 11 * 60:                   # <= 11:00 → 午餐先
+            meal_mode = "lunch"
+            rest_window = (11 * 60 + 30, 13 * 60)       # 11:30–13:00
+        else:                                  # 11:00–13:00 → 先活动后午餐
+            meal_mode = "lunch_mid"
+            rest_window = (12 * 60 + 30, 13 * 60 + 30)  # 12:30–13:30
 
-        def mk_node(src: dict, cat: str) -> dict:
-            s, e, d = slot(src.get("estimated_duration_min",
-                                   120 if cat == "main_activity" else 60))
-            n = {
+        def mk_node(src: dict, cat: str, s: int, e: int) -> dict:
+            d = e - s
+            return {
                 "node_id": f"n_{len(nodes)+1}",
                 "poi_id": src.get("poi_id", ""),
                 "poi_name": src.get("name", ""),
@@ -260,28 +264,76 @@ class ChatAgent:
                 "duration_min": d,
                 "tags": src.get("tags", []),
                 "planner_reason": src.get("planner_reason", ""),
-                # 透传 SSE 适配器需要的字段
                 "address": src.get("address", ""),
                 "distance_km": src.get("distance_km", 0),
                 "rating": src.get("rating", 0),
                 "ticket_price": src.get("ticket_price", src.get("avg_price", 0)),
                 "avg_price": src.get("avg_price", 0),
             }
-            return n
 
-        main = selected.get("main_activity", {})
-        if main.get("poi_id"):
-            nodes.append(mk_node(main, "main_activity"))
+        def add_activity(src: dict, cat: str, fixed_start: int = None):
+            """安排一个活动节点，可指定固定开始时间"""
+            nonlocal nodes
+            raw_dur = src.get("estimated_duration_min",
+                              90 if cat == "main_activity" else 60)
+            # Step 2: 有儿童时单次活动 ≤ 90min
+            if has_child and cat != "restaurant":
+                raw_dur = min(raw_dur, 90)
+            prev_end = nodes[-1]["_end"] if nodes else dep
+            if fixed_start is not None:
+                start = max(fixed_start, prev_end + buf)
+            else:
+                start = prev_end + buf
+            end = start + raw_dur
+            node = mk_node(src, cat, start, end)
+            node["_end"] = end  # 内部用，不出现在输出里
+            nodes.append(node)
 
-        rest = selected.get("restaurant", {})
-        if rest.get("poi_id"):
-            nodes.append(mk_node(rest, "restaurant"))
+        main_act = selected.get("main_activity", {})
+        restaurant = selected.get("restaurant", {})
+        opt_act = selected.get("optional_activity", {})
 
-        opt = selected.get("optional_activity", {})
-        if opt.get("poi_id"):
-            nodes.append(mk_node(opt, "optional_activity"))
+        # ── Step 1 分支执行 ──
+        if meal_mode == "dinner":
+            # departure >= 13:00 → 跳过午餐，晚餐 17:30–19:30
+            if main_act.get("poi_id"):
+                add_activity(main_act, "main_activity")
+            if opt_act.get("poi_id"):
+                add_activity(opt_act, "optional_activity")
+            if restaurant.get("poi_id"):
+                rest_dur = min(restaurant.get("estimated_duration_min", 60), 90)
+                r_start = max(rest_window[0], (nodes[-1]["_end"] if nodes else dep) + buf)
+                if r_start + rest_dur > rest_window[1]:
+                    r_start = rest_window[1] - rest_dur
+                add_activity(restaurant, "restaurant", fixed_start=r_start)
 
-        total = nodes[-1]["end_time"] if nodes else departure
+        elif meal_mode == "lunch":
+            # departure <= 11:00 → 先午餐 11:30–13:00
+            if restaurant.get("poi_id"):
+                add_activity(restaurant, "restaurant", fixed_start=rest_window[0])
+            if main_act.get("poi_id"):
+                add_activity(main_act, "main_activity")
+            if opt_act.get("poi_id"):
+                add_activity(opt_act, "optional_activity")
+
+        else:  # lunch_mid — 先活动，12:30-13:30 吃饭
+            if main_act.get("poi_id"):
+                add_activity(main_act, "main_activity")
+            if restaurant.get("poi_id"):
+                add_activity(restaurant, "restaurant", fixed_start=rest_window[0])
+            if opt_act.get("poi_id"):
+                add_activity(opt_act, "optional_activity")
+
+        # Step 5: 自检 — 清理内部字段 + 确保餐厅在合法窗口
+        for n in nodes:
+            n.pop("_end", None)
+            if n["category"] == "restaurant":
+                hs, ms = map(int, n["start_time"].split(":"))
+                start_min = hs * 60 + ms
+                if start_min < rest_window[0] or start_min > rest_window[1]:
+                    n["start_time"] = f"{rest_window[0]//60:02d}:{rest_window[0]%60:02d}"
+                    n["end_time"] = f"{(rest_window[0]+n['duration_min'])//60:02d}:{(rest_window[0]+n['duration_min'])%60:02d}"
+
         return {"success": True, "data": {
             "itinerary_id": "iti_mock",
             "nodes": nodes,
