@@ -599,7 +599,7 @@ class ChatAgent:
         self.session_id = await self.orchestrator.start_session(enriched, session_id=existing_sid)
 
         # 等 Phase 1 完成
-        for _ in range(40):
+        for _ in range(80):
             await asyncio.sleep(1)
             s = await self.orchestrator.get_status(self.session_id)
             if s.itinerary_state in ("pending_confirm", "executing", "completed", "needs_replan"):
@@ -607,7 +607,7 @@ class ChatAgent:
                 self._planning = False
                 return self._show_plan_str(s.nodes) if s.nodes else "方案已就绪"
         self._planning = False
-        return "规划超时，请重试"
+        return "规划超时，LLM 响应过慢，请稍后重试"
 
     async def _do_replan(self, user_input: str) -> str:
         sp("\n[重新规划] 根据您的反馈调整方案...")
