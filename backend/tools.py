@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable
 
 import httpx
 
@@ -22,14 +22,14 @@ _registry = ToolRegistry()
 _registered = False
 
 
-async def _http_get(path: str, params: Optional[dict] = None, timeout_s: float = 6.0) -> dict:
+async def _http_get(path: str, params: dict | None = None, timeout_s: float = 6.0) -> dict:
     async with httpx.AsyncClient(timeout=timeout_s, trust_env=False) as client:
         response = await client.get(f"{MOCK_API}{path}", params=params)
         response.raise_for_status()
         return response.json()
 
 
-async def _http_post(path: str, body: Optional[dict] = None, timeout_s: float = 6.0) -> dict:
+async def _http_post(path: str, body: dict | None = None, timeout_s: float = 6.0) -> dict:
     async with httpx.AsyncClient(timeout=timeout_s, trust_env=False) as client:
         response = await client.post(f"{MOCK_API}{path}", json=body or {})
         response.raise_for_status()
@@ -86,7 +86,7 @@ def _register_tools() -> None:
     _registered = True
 
 
-async def _request_with_registry(tool_name: str, payload: Optional[dict] = None) -> dict:
+async def _request_with_registry(tool_name: str, payload: dict | None = None) -> dict:
     _register_tools()
     result = await _registry.invoke(tool_name, payload or {})
     if result.get("success"):
@@ -96,7 +96,7 @@ async def _request_with_registry(tool_name: str, payload: Optional[dict] = None)
     return {"error": error.get("message", "tool failed"), "code": error.get("code")}
 
 
-async def _get(path: str, params: Optional[dict] = None) -> dict:
+async def _get(path: str, params: dict | None = None) -> dict:
     name_by_path = {
         "/api/activities/search": "activities_search",
         "/api/restaurants/search": "restaurants_search",
@@ -252,7 +252,7 @@ async def trigger_preset_event(event_type: str, target_poi_id: str = None) -> di
 
 async def booking_execute(
     node: dict,
-    on_status: Callable[[dict], Optional[Awaitable[None]]] | None = None,
+    on_status: Callable[[dict], Awaitable[None] | None] | None = None,
 ) -> dict:
     """Execute a frontend-compatible booking lifecycle for one itinerary node."""
     _register_tools()

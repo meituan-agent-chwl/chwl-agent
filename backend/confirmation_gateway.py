@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
 
-ConfirmationCallback = Callable[[bool, dict[str, Any], Any], Optional[Awaitable[None]]]
+ConfirmationCallback = Callable[[bool, dict[str, Any], Any], Awaitable[None] | None]
 
 
 @dataclass
@@ -156,7 +156,7 @@ class ConfirmationGateway:
             return None
         return session.setdefault("pending_confirmations", {}).get(request_id)
 
-    def find_latest_pending(self, session_id: str, type: Optional[str] = None) -> Optional[dict[str, Any]]:
+    def find_latest_pending(self, session_id: str, type: str | None = None) -> Optional[dict[str, Any]]:
         session = self.manager.get(session_id)
         if not session:
             return None
