@@ -377,6 +377,35 @@ class ChatAgent:
             for loss in losses:
                 sp(f"      - {loss.get('name','')} ({loss.get('type',loss.get('reason',''))})")
 
+    # ── Mock 意图路由（纯规则，不调 LLM） ──
+
+    def _mock_route_action(self, user_input: str, state: str) -> tuple[str, str]:
+        """纯规则意图路由，替代 LLM 的 chat_json 调用"""
+        inp = user_input.strip()
+        has_plan = state in ("pending_confirm", "executing", "completed")
+        # replan
+        if any(k in inp for k in ("换一个", "重新规划", "不喜欢", "太赶", "太早", "太晚")):
+            return "replan", "好的，根据您的反馈重新调整方案"
+        # show_plan
+        if any(k in inp for k in ("行程", "方案在哪", "看看", "展示", "结果")):
+            return ("show_plan", "这是当前方案") if has_plan else ("chat", "正在为您规划，稍等一下")
+        # confirm
+        if any(k in inp for k in ("好", "行", "确认", "安排", "可以", "就这样")):
+            return ("confirm", "好的，马上安排预约") if has_plan else ("plan", "好的，开始规划")
+        # cancel
+        if any(k in inp for k in ("取消", "不去了", "算了")):
+            return "cancel", "好的，已取消"
+        # 新对话或 draft → 检查信息完整性
+        if state in ("none", "unknown", "draft", "init", ""):
+            has_time = any(k in inp for k in ("点", ":", "下午", "上午", "中午", "晚上"))
+            has_people = any(k in inp for k in ("人", "朋友", "孩子", "老婆", "老公", "一起", "和"))
+            if not has_time:
+                return "clarify", "请问您打算几点出发呢？"
+            if not has_people:
+                return "clarify", "请问几个人去？"
+            return "plan", "好的，开始搜索方案"
+        return "chat", "您说什么？"
+
     # ── Agent 循环 ──
 
     async def start(self):
@@ -413,34 +442,30 @@ class ChatAgent:
         if not self.session_id:
             self.session_id = await self.orchestrator.start_session(user_input)
 
-        # 发给 LLM 做意图理解
+        # 意图理解（mock 模式用规则路由，不调 DeepSeek）
         ctx = await self._build_context()
         ctx_data = json.loads(ctx)
-        prompt = AGENT_PROMPT.format(state=ctx_data["state"], plan_summary=ctx_data["plan"])
+        state = ctx_data.get("state", "none")
 
-        try:
-            result = await self.llm.chat_json(
-                system=prompt,
-                messages=self.conversation_history[-8:],
-                temperature=0.2,
-            )
-        except Exception:
-            return "我没理解，您能再说一遍吗？"
+        if self.mock_llm:
+            action, response = self._mock_route_action(user_input, state)
+        else:
+            prompt = AGENT_PROMPT.format(state=state, plan_summary=ctx_data.get("plan", "无"))
+            try:
+                result = await self.llm.chat_json(
+                    system=prompt,
+                    messages=self.conversation_history[-8:],
+                    temperature=0.2,
+                )
+            except Exception:
+                return "我没理解，您能再说一遍吗？"
+            action = result.get("action", "chat")
+            response = result.get("response", "您说")
 
-        action = result.get("action", "chat")
-        response = result.get("response", "您说")
         self.conversation_history.append({"role": "assistant", "content": response})
 
-        # 带 guardrail 的 action dispatch
-        try:
-            status = await self.orchestrator.get_status(self.session_id)
-            state = status.itinerary_state
-        except Exception:
-            state = "none"
-
-        # 状态守卫层
-        # 当 state=none（无会话）时，chat→plan 强制路由，不回复废话
-        if state in ("none", "draft") and action == "chat":
+        # 带 guardrail 的 action dispatch（state 已在上面获得）
+        if state in ("none", "unknown", "draft") and action == "chat":
             action = "plan"
         invalid_map = {
             "confirm": ["init", "draft", "none", "cancelled"],

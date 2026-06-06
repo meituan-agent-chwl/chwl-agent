@@ -98,21 +98,78 @@ async def chat(session_id: str, request: Request):
 
 @app.post("/agent/{session_id}/fulfill")
 async def fulfill(session_id: str):
+    """履约 SSE — 使用 event_bus 订阅 Phase 2 事件，格式化为正确 SSE"""
     async def stream():
+        import asyncio, json
         try:
             agent = get_or_create_agent(session_id)
-            result = await agent.orchestrator.confirm_itinerary(session_id)
-            yield {"type": "fulfill_init", "items": []}
+            # 获取当前行程节点作为履约项
+            s = await agent.orchestrator.get_status(session_id)
+            items = []
+            for n in s.nodes:
+                items.append({
+                    "id": n.get("node_id", ""),
+                    "name": n.get("name", ""),
+                    "status": "queued",
+                    "action": "reserve",
+                })
+            yield f"data: {json.dumps({'type': 'fulfill_init', 'items': items}, ensure_ascii=False)}\n\n"
 
-            for i in range(12):
-                await asyncio.sleep(1.5)
-                s = await agent.orchestrator.get_status(session_id)
-                yield {"type": "fulfill_progress", "value": min(100, (i+1)*12)}
-                if s.itinerary_state in ("completed", "needs_replan"):
-                    yield {"type": "monitor_started", "message": "预约成功，后台监控已启动"}
-                    return
+            # 订阅 event_bus 事件（booking_status_changed / execution_complete）
+            q = asyncio.Queue()
+            def on_event(ctx, evt):
+                try:
+                    etype = evt.get("type", "")
+                    data = evt.get("data", {})
+                    if etype == "booking_status_changed":
+                        q.put_nowait({
+                            "type": "fulfill_item",
+                            "id": data.get("node_id", ""),
+                            "name": data.get("name", ""),
+                            "status": data.get("status", ""),
+                            "action": "reserve",
+                        })
+                    elif etype == "execution_complete":
+                        q.put_nowait({"type": "execution_complete"})
+                    elif etype == "monitor_started":
+                        q.put_nowait({"type": "monitor_started", "message": data.get("message", "后台监控已启动")})
+                    elif etype == "status_update":
+                        msg = data.get("message", "")
+                        if msg:
+                            q.put_nowait({"type": "progress_text", "text": msg})
+                except Exception:
+                    pass
+            agent.event_bus.subscribe("*", on_event)
+
+            # 启动履约
+            await agent.orchestrator.confirm_itinerary(session_id)
+
+            # 持续接收事件直到完成
+            progress = 0
+            timeout = 45  # 最大等待 45 秒
+            while timeout > 0:
+                try:
+                    evt = await asyncio.wait_for(q.get(), timeout=1.5)
+                    yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+                    if evt.get("type") == "execution_complete":
+                        # 履约完成，再发 100% 进度
+                        yield f"data: {json.dumps({'type': 'fulfill_progress', 'value': 100}, ensure_ascii=False)}\n\n"
+                        yield f"data: {json.dumps({'type': 'monitor_started', 'message': '全部预约成功！后台监控已启动 ✅'}, ensure_ascii=False)}\n\n"
+                        return
+                    timeout -= 1.5
+                    # 每轮发送进度更新
+                    progress = min(100, progress + 15)
+                    yield f"data: {json.dumps({'type': 'fulfill_progress', 'value': progress}, ensure_ascii=False)}\n\n"
+                except asyncio.TimeoutError:
+                    timeout -= 1.5
+                    progress = min(100, progress + 8)
+                    yield f"data: {json.dumps({'type': 'fulfill_progress', 'value': progress}, ensure_ascii=False)}\n\n"
+
+            yield f"data: {json.dumps({'type': 'monitor_started', 'message': '预约流程完成 ✅'}, ensure_ascii=False)}\n\n"
+            agent.event_bus.unsubscribe("*", on_event)
+
         except Exception as e:
-            yield {"type": "error", "message": str(e)}
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(stream(), media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})

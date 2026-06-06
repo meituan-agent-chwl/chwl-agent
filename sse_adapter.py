@@ -23,6 +23,7 @@ EVENT_MAP = {
     "replan_ready":       "status",
     "replan_applied":     "itinerary_updated",
     "monitor_started":    "text",
+    "cot_step":           "cot_step",
 }
 
 # 状态消息 → 前端 status card item id 的映射
@@ -78,6 +79,57 @@ def _fmt_node(n: dict) -> dict:
         "locked": n.get("completed_lock", False) or n.get("soft_lock", False),
     }
 
+def _make_commentary(nodes: list[dict], summary: str) -> str:
+    """根据行程节点生成人话点评，解释方案合理性"""
+    if not nodes:
+        return ""
+    parts = []
+    # 识别场景：有餐厅 → 吃饭时间合理吗？
+    rest_node = next((n for n in nodes if n.get("type") == "restaurant"), None)
+    act_node = next((n for n in nodes if n.get("type") in ("main_activity", "indoor_playground", "museum", "exhibition", "entertainment")), None)
+    walk_node = next((n for n in nodes if n.get("type") in ("optional_activity", "outdoor_walk", "shopping", "park")), None)
+
+    time_summary = " → ".join(f'{n.get("timeStart","")}-{n.get("timeEnd","")}' for n in nodes if n.get("timeStart"))
+    if time_summary:
+        parts.append(f"时间上：{time_summary}")
+    # 活动点评
+    activity_comments = []
+    if act_node:
+        tags = act_node.get("tags", [])
+        name = act_node.get("name", "")
+        if "亲子" in tags or "儿童" in tags or "室内" in tags:
+            activity_comments.append(f"「{name}」是室内亲子活动，适合带孩子")
+        elif "户外" in tags:
+            activity_comments.append(f"「{name}」是户外活动，天气好的话很舒服")
+        else:
+            activity_comments.append(f"先玩「{name}」")
+    if rest_node:
+        t = rest_node.get("timeStart", "")
+        name_r = rest_node.get("name", "")
+        tags_r = rest_node.get("tags", [])
+        if "低卡" in tags_r or "清淡" in tags_r or "健康" in tags_r:
+            activity_comments.append(f"{t}去「{name_r}」吃饭，清淡健康")
+        else:
+            activity_comments.append(f"{t}在「{name_r}」用餐")
+    if walk_node:
+        name_w = walk_node.get("name", "")
+        activity_comments.append(f"最后去「{name_w}」散步消食")
+
+    if activity_comments:
+        parts.append("安排上：" + "，".join(activity_comments))
+    # 合理性点评
+    if rest_node:
+        rest_h, _ = map(int, rest_node.get("timeStart", "18:00").split(":"))
+        if 17 <= rest_h <= 20:
+            parts.append("餐厅安排在晚餐时间，合理 ✅")
+        elif 11 <= rest_h <= 13:
+            parts.append("餐厅安排在午餐时间，合理 ✅")
+    if summary:
+        total = summary.split("共")[-1] if "共" in summary else ""
+        if total:
+            parts.append(f"全程{total}，节奏不紧不慢")
+    return "💡 方案解读：" + "；".join(parts)
+
 def create_sse_session(event_bus: EventBus, session_id: str):
     """
     创建一个 session-scoped 的 SSE 事件队列。
@@ -123,6 +175,10 @@ def create_sse_session(event_bus: EventBus, session_id: str):
                 "summary": itin.get("summary", ""),
                 "alternatives": fmt_alts,
             })
+            # 方案点评：生成人话解释方案合理性
+            commentary = _make_commentary(fmt_nodes, itin.get("summary", ""))
+            if commentary:
+                queue.put_nowait({"type": "text", "content": commentary})
             return
 
         elif sse_type == "fulfill_item":
@@ -157,6 +213,12 @@ def create_sse_session(event_bus: EventBus, session_id: str):
             nodes2 = itin2.get("nodes", [])
             fmt2 = [_fmt_node(n) for n in nodes2]
             queue.put_nowait({"type": "itinerary_updated", "nodes": fmt2})
+            return
+
+        elif sse_type == "cot_step":
+            text = data.get("text", "")
+            if text:
+                queue.put_nowait({"type": "cot_step", "text": text})
             return
 
         # 兜底：直接转发

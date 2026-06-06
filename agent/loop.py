@@ -336,6 +336,9 @@ class Orchestrator:
             await self.event_bus.emit("status_update", ctx, {
                 "message": "正在获取当前位置、天气和活动信息..."
             })
+            await self.event_bus.emit("cot_step", ctx, {
+                "text": "第一步：理解你的出行需求…",
+            })
 
             # ── Step 1: 5 路并行数据采集 ──
             data = await self.tools.invoke_parallel([
@@ -387,6 +390,9 @@ class Orchestrator:
 
             await self.event_bus.emit("status_update", ctx, {
                 "message": f"已找到 {len(acts)} 个活动和 {len(rests)} 个餐厅，正在评分..."
+            })
+            await self.event_bus.emit("cot_step", ctx, {
+                "text": f"找到 {len(acts)} 个活动和 {len(rests)} 个餐厅，正在根据你的场景筛选评分…",
             })
 
             # ── Step 2: LLM 评分 ──
@@ -453,6 +459,9 @@ class Orchestrator:
             # ── Step 4: 生成行程 ──
             await self.event_bus.emit("status_update", ctx, {
                 "message": "正在生成行程方案..."
+            })
+            await self.event_bus.emit("cot_step", ctx, {
+                "text": "正在编排行程：根据出发时间确定用餐模式，安排活动顺序和交通缓冲…",
             })
 
             scene = ctx.user_context.scene.value
