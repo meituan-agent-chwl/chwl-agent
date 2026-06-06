@@ -45,8 +45,11 @@ class LLMClient:
     def __init__(self, api_key: str = "", base_url: str = "",
                  model: str = "", timeout_s: int = 30):
         # 如果传入了 api_key 但环境变量没设，补到环境变量里让 _provider() 能检测到
-        if api_key and not os.environ.get(ENV_DEEPSEEK_KEY):
-            os.environ[ENV_DEEPSEEK_KEY] = api_key
+        if api_key:
+            if not os.environ.get(ENV_LONGCAT_KEY) and not os.environ.get(ENV_DEEPSEEK_KEY):
+                os.environ[ENV_LONGCAT_KEY] = api_key
+            if not os.environ.get(ENV_DEEPSEEK_KEY):
+                os.environ[ENV_DEEPSEEK_KEY] = api_key
         self.provider_name = _provider()
         # LongCat
         self.longcat_key = os.environ.get(ENV_LONGCAT_KEY, api_key)
