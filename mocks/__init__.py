@@ -18,6 +18,39 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# ─── 从完整 POIS 数据集构建 Mock 数据 ─────────────────────────
+try:
+    from mock_api.mock_data.poi_data import POIS as _FULL_POIS
+    def _pois_to_mock(scenario, ptype):
+        DFLT = {'restaurant': ['简餐', '亲子'], 'activity': ['室内', '休闲']}
+        out = []
+        for p in _FULL_POIS:
+            if p.get('scenario') not in (scenario, 'both') or p.get('type') != ptype:
+                continue
+            t = p.get('tags', DFLT.get(ptype, [])) or DFLT.get(ptype, [])
+            tags = t if isinstance(t, list) else [t]
+            cf = any(k in str(tags) for k in ('亲子', '儿童'))
+            out.append({
+                'poi_id': p['poi_id'], 'name': p['name'],
+                'category': p.get('category', ''), 'address': p.get('address', ''),
+                'distance_km': p.get('distance_km', 0), 'rating': p.get('rating', 0),
+                'estimated_duration_min': p.get('estimated_duration_min', 60),
+                'tags': tags, 'avg_price': p.get('avg_price', 0),
+                'ticket_price': p.get('ticket_price', p.get('avg_price', 0)),
+                'child_friendly': cf,
+                'queue_time_min': max(0, int(p.get('estimated_duration_min', 60) * 0.15)),
+                'open_time': p.get('business_hours', '10:00-22:00'),
+                'cuisine': '', 'child_seat': cf,
+                'healthy_option': any(k in str(tags) for k in ('清淡', '低卡', '健康', '轻食')),
+            })
+        return out
+    MOCK_ACTIVITIES_FAMILY = _pois_to_mock('family', 'activity')
+    MOCK_ACTIVITIES_FRIENDS = _pois_to_mock('friends', 'activity')
+    MOCK_RESTAURANTS_FAMILY = _pois_to_mock('family', 'restaurant')
+    MOCK_RESTAURANTS_FRIENDS = _pois_to_mock('friends', 'restaurant')
+except Exception as _e:
+    logger.warning('[Mock] 无法加载完整 POIS: %%s', _e)
+
 # ─── Mock 数据池 ──────────────────────────────────────────────
 
 MOCK_LOCATION = {
