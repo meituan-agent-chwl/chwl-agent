@@ -34,6 +34,13 @@ for name in ["location", "user_context", "weather", "activities_search",
 logger.info("Mock backend registered (instant, no LLM)")
 
 orchestrator = Orchestrator(tools)
+plan_errors: dict[str, str] = {}
+
+# Capture plan_failed events for diagnostic
+@orchestrator.event_bus.subscribe("plan_failed")
+async def on_plan_failed(ctx, event):
+    plan_errors[event.get("session_id", "")] = str(event.get("data", {}).get("error", ""))
+    logger.error("plan_failed: %s %s", event.get("session_id","")[:8], event.get("data",{}))
 sessions: dict[str, dict] = {}
 
 # ─── Helpers ───────────────────────────────────────────────
@@ -76,45 +83,47 @@ async def chat(session_id: str, request: Request):
     phase_hint = body.get("phase_hint", "")
 
     async def event_stream():
-        # Start planning
+        # 澄清阶段：如果没有 phase_hint，先问信息
+        if not phase_hint:
+            yield {"type": "clarify", "message": "好的，请问大概几点出发？几个人呢？"}
+            return
+
+        # 规划阶段（phase_hint = "start_plan"）
         sid = await orchestrator.start_session(message)
 
-        # Emit status events for planning progress
         yield {"type": "status", "id": 1, "text": "需求已确认", "status": "done"}
         yield {"type": "status", "id": 2, "text": "搜索附近活动", "status": "loading"}
+        yield {"type": "status", "id": 3, "text": "查询排队情况", "status": "loading"}
+        yield {"type": "status", "id": 4, "text": "AI 规划中", "status": "loading"}
         yield {"type": "cot_step", "text": "开始规划下午行程..."}
 
-        # Wait for Phase 1（15s 超时）
-        for i in range(15):
+        for i in range(25):
             await asyncio.sleep(1)
             s = await orchestrator.get_status(sid)
             if s.itinerary_state == "pending_confirm":
-                # Build nodes in frontend format
-                nodes = []
-                for n in s.nodes:
-                    nodes.append({
-                        "id": n.get("node_id", ""),
-                        "poiId": n.get("poi_id", ""),
-                        "name": n.get("poi_name", ""),
-                        "type": n.get("category", "activity"),
-                        "startTime": n.get("scheduled_start", ""),
-                        "endTime": n.get("scheduled_end", ""),
-                        "duration": n.get("duration_min", 60),
-                        "status": n.get("status", "planned"),
-                        "tags": n.get("tags", []),
-                        "address": n.get("address", ""),
-                        "booking_status": n.get("booking_status"),
-                    })
+                nodes = [{
+                    "id": n.get("node_id", ""),
+                    "poiId": n.get("poi_id", ""),
+                    "name": n.get("poi_name", ""),
+                    "type": n.get("category", "activity"),
+                    "startTime": n.get("scheduled_start", ""),
+                    "endTime": n.get("scheduled_end", ""),
+                    "duration": n.get("duration_min", 60),
+                    "status": n.get("status", "planned"),
+                    "tags": n.get("tags", []),
+                    "address": n.get("address", ""),
+                    "booking_status": n.get("booking_status"),
+                } for n in s.nodes]
 
-                yield {"type": "status", "id": 2, "text": "搜索完成", "status": "done"}
-                yield {"type": "status", "id": 3, "text": "已找到合适活动", "status": "done"}
-                yield {"type": "cot_step", "text": f"生成 {len(nodes)} 个活动节点"}
-                yield {"type": "status", "id": 4, "text": "AI 规划完成", "status": "done"}
-
+                yield {"type": "cot_step", "text": f"共 {len(nodes)} 个活动"}
+                yield {"type": "status", "id": 2, "status": "done", "text": "搜索完成"}
+                yield {"type": "status", "id": 3, "status": "done", "text": "排队已查"}
+                yield {"type": "status", "id": 4, "status": "done", "text": "规划完成"}
                 yield {"type": "itinerary_ready", "nodes": nodes, "summary": s.summary}
                 return
 
-        yield {"type": "error", "message": "规划超时，请重试"}
+        err_detail = plan_errors.get(sid, "")
+        yield {"type": "error", "message": f"规划失败: {err_detail}" if err_detail else "规划超时"}
 
     return sse_response(event_stream())
 
