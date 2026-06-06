@@ -83,9 +83,10 @@ async def chat(session_id: str, request: Request):
     phase_hint = body.get("phase_hint", "")
 
     async def event_stream():
-        # 澄清阶段：如果没有 phase_hint，先问信息
+        # 首次消息（无 phase_hint）：先问时间人数，然后直接规划
         if not phase_hint:
-            yield {"type": "clarify", "message": "好的，请问大概几点出发？几个人呢？"}
+            yield {"type": "clarify", "message": "好的，请问大概几点出发？几个人呢？",
+                   "facts": {}, "preferences": {}, "phase": "confirming"}
             return
 
         # 规划阶段（phase_hint = "start_plan"）
