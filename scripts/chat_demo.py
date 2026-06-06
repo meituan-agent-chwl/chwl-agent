@@ -455,34 +455,42 @@ class ChatAgent:
             self.conversation_history.append({"role": "assistant", "content": reply})
             return reply
         
-        # 在 mock 模式下用规则路由；在 LLM 模式下用 planner 的 clarify/confirm 流程
-        if not self.mock_llm and self.session_id and len(self.conversation_history) <= 3:
-            # 尝试 LLM 深度追问
-            try:
-                clarify_result = await self.planner.clarify_needs(
-                    user_input, current_time="14:00")
-                if clarify_result.get("success"):
-                    data = clarify_result["data"]
-                    inferred = data.get("inferred", {})
-                    questions = data.get("clarify_questions", [])
-                    msg = data.get("confirm_message", "")
-                    if questions:
-                        # 有追问 → 存 inferred 到 memory 并返回追问
-                        if hasattr(self.orchestrator, 'memory'):
-                            self.orchestrator.memory.put_batch(
-                                self.session_id, "session_facts", inferred,
-                                source="clarify", confidence=0.7)
-                        self.conversation_history.append(
-                            {"role": "assistant", "content": msg})
-                        return msg
-                    # 无追问 → 信息已完整，跳过常规 routing，直接规划
-                    import logging
-                    logging.getLogger(__name__).info('[Agent] clarify 无追问，直接规划')
-                    self.conversation_history.append(
-                        {'role': 'assistant', 'content': msg or '好的，开始安排'})
-                    return await self._do_plan(user_input)
-            except Exception as e:
-                logging.getLogger(__name__).warning('[Agent] clarify 异常: %s', e)
+        # LLM 模式：两步追问流程（clarify → confirm_preferences）
+        if not self.mock_llm and self.session_id:
+            if getattr(self, '_clarify_state', None) is None:
+                try:
+                    cr = await self.planner.clarify_needs(user_input, current_time="14:00")
+                    if cr.get("success"):
+                        d = cr["data"]
+                        self._clarify_state = d.get("inferred", {})
+                        qs = d.get("clarify_questions", [])
+                        msg = d.get("confirm_message", "")
+                        if qs:
+                            self.conversation_history.append({'role': 'assistant', 'content': msg})
+                            return msg
+                        self.conversation_history.append({'role': 'assistant', 'content': msg or '好的，开始安排'})
+                        self._clarify_state = None
+                        return await self._do_plan(user_input)
+                except Exception as e:
+                    logger.warning('[Agent] clarify 异常: %s', e)
+            else:
+                try:
+                    cr = await self.planner.confirm_preferences(
+                        self._clarify_state, user_input, self.conversation_history[-4:])
+                    if cr.get("success"):
+                        d = cr["data"]
+                        self._clarify_state = d.get("inferred", self._clarify_state)
+                        msg = d.get("confirm_message", "")
+                        all_ok = d.get("all_confirmed", False)
+                        if not all_ok:
+                            self.conversation_history.append({'role': 'assistant', 'content': msg or '还有吗？'})
+                            return msg or '还有吗？'
+                        self.conversation_history.append({'role': 'assistant', 'content': msg or '好的，开始安排'})
+                        self._clarify_state = None
+                        return await self._do_plan(user_input)
+                except Exception as e:
+                    logger.warning('[Agent] confirm 异常: %s', e)
+                    self._clarify_state = None
 
         # 首次输入 → 创建 session（不主动规划，等 LLM 决定 action）
         if not self.session_id:
