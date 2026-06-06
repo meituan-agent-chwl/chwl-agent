@@ -47,7 +47,29 @@ class LLMClient:
         text = await self.chat(system=system, messages=messages,
                                response_format={"type": "json_object"}, temperature=temperature)
         text = text.strip()
+        # 去除 markdown 代码块标记
         if text.startswith("```"):
             text = text.split("\n", 1)[-1]
             text = text.rsplit("```", 1)[0]
-        return json.loads(text.strip())
+            text = text.strip()
+        # 容错：如果没有最外层 {}，尝试补上
+        if not text.startswith("{"):
+            # 找到第一个 { 和最后一个 }
+            start = text.find("{")
+            end = text.rfind("}")
+            if start >= 0 and end > start:
+                text = text[start:end+1]
+            else:
+                # 连 {} 都没有，可能是只有键值对如 "action":"xxx"
+                text = "{" + text + "}"
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            logger.error("[LLM] JSON 解析失败: %s | text=%s", e, text[:200])
+            # 最后的兜底：尝试修复常见问题
+            fixed = text.replace("'", '"').replace("\n", " ").replace("\r", " ")
+            try:
+                return json.loads(fixed)
+            except json.JSONDecodeError:
+                logger.error("[LLM] 修复后仍然无法解析")
+                return {"action": "chat", "response": "系统正忙，请重试", "reason": "json_parse_error"}
