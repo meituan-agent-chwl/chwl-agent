@@ -102,13 +102,14 @@ def sp(text: str):
 class ChatAgent:
     """LLM 驱动的 Agent 对话循环"""
 
-    def __init__(self, session_id: str = "", use_teammate: bool = False):
+    def __init__(self, session_id: str = "", use_teammate: bool = False, mock_llm: bool = True):
         self.llm = LLMClient(api_key=API_KEY)
         self.planner = LLMPlanner(self.llm)
         self.session_id = session_id
         self.conversation_history: list[dict] = []
         self._plan_id: str | None = None
         self._planning: bool = False
+        self.mock_llm = mock_llm
 
         self.event_bus = EventBus()
         self.orchestrator = self._build(use_teammate)
@@ -116,10 +117,17 @@ class ChatAgent:
 
     def _build(self, use_teammate: bool) -> Orchestrator:
         tools = ToolRegistry()
-        tools.register_mock("user_context", self.planner.handle_user_context)
-        tools.register_mock("candidates_score", self.planner.handle_candidates_score)
-        tools.register_mock("itinerary_generate", self.planner.handle_itinerary_generate)
-        tools.register_mock("itinerary_replan", self.planner.handle_itinerary_replan)
+        # 根据模式注册 LLM 工具：mock 模式用纯逻辑（不调 DeepSeek）
+        if self.mock_llm:
+            tools.register_mock("user_context", self._mock_user_context)
+            tools.register_mock("candidates_score", self._mock_candidates_score)
+            tools.register_mock("itinerary_generate", self._mock_itinerary_generate)
+            tools.register_mock("itinerary_replan", self._mock_itinerary_replan)
+        else:
+            tools.register_mock("user_context", self.planner.handle_user_context)
+            tools.register_mock("candidates_score", self.planner.handle_candidates_score)
+            tools.register_mock("itinerary_generate", self.planner.handle_itinerary_generate)
+            tools.register_mock("itinerary_replan", self.planner.handle_itinerary_replan)
 
         if use_teammate:
             adapter = TeammateAPIAdapter("http://127.0.0.1:8000")
@@ -133,6 +141,158 @@ class ChatAgent:
                          "booking_execute", "booking_status"]:
                 tools.register_mock(name, getattr(mem, f"handle_{name}"))
         return Orchestrator(tools, event_bus=self.event_bus)
+
+    # ── Mock LLM handlers（不调 DeepSeek，纯逻辑，<50ms） ──
+
+    async def _mock_user_context(self, payload: dict) -> dict:
+        """纯文本规则提取用户意图"""
+        text = payload.get("input", "")
+        has_friend = "朋友" in text
+        has_child = any(k in text for k in ("孩子", "小孩", "儿童", "宝宝", "娃"))
+        has_weight_loss = any(k in text for k in ("减肥", "瘦", "减脂"))
+        has_light = any(k in text for k in ("清淡", "健康", "轻食"))
+        special = []
+        if has_weight_loss or has_light:
+            special.append("减肥" if has_weight_loss else "清淡")
+        scene = "friends" if has_friend and not has_child else ("family" if has_child else "solo")
+        mode = "full_managed" if has_child else "light_managed"
+        # 从输入里提取出发时间
+        start_time = "14:00"
+        import re as _re
+        tm = _re.search(r"(\d+)[:：点](\d*)|(\d+)[:：点]?", text)
+        if tm:
+            h = int(tm.group(1) or tm.group(3) or "14")
+            m = int(tm.group(2)) if tm.group(2) else 0
+            start_time = f"{h:02d}:{m:02d}"
+        return {"success": True, "data": {
+            "scene": scene, "time_range": "afternoon", "distance_constraint": "nearby",
+            "companions_text": text,
+            "companions": [{"type": "child", "age": 6}] if has_child else (
+                [{"type": "friend"}] if has_friend else []),
+            "special_requirements": special,
+            "missing_info": [] if start_time or any(k in text for k in ("点", ":")) else ["start_time"],
+            "intent_conflict": False, "mode": mode, "start_time": start_time,
+        }}
+
+    async def _mock_candidates_score(self, payload: dict) -> dict:
+        """规则评分（LLM prompt 里的逻辑直接代码化）"""
+        candidates = payload.get("candidates", [])
+        scene = (payload.get("user_context") or {}).get("scene", "family")
+        scored = []
+        for c in candidates:
+            score = 50
+            tags_str = " ".join(c.get("tags", []))
+            if scene == "family":
+                if c.get("child_friendly") or "亲子" in tags_str or "儿童" in tags_str:
+                    score += 25
+                if "室内" in tags_str:
+                    score += 15
+            else:
+                if any(t in tags_str for t in ("社交", "氛围", "拍照")):
+                    score += 15
+            q = c.get("queue_time_min", 0)
+            if q > 60:
+                score -= 100  # disqualified
+            elif q > 30:
+                score -= 25
+            d = c.get("distance_km", 0)
+            if d > 10:
+                score -= 25
+            elif d > 5:
+                score -= 10
+            # 健康/低卡加分
+            if any(t in tags_str for t in ("低卡", "清淡", "健康", "轻食")):
+                score += 10
+            score = max(0, min(100, score))
+            scored.append({
+                "poi_id": c.get("poi_id", ""),
+                "score": score,
+                "tags_matched": [],
+                "planner_reason": self._mock_reason(c, scene),
+                "recommended": score >= 70,
+                "disqualified_reason": "排队过长" if q > 60 else None,
+            })
+        scored.sort(key=lambda s: s["score"], reverse=True)
+        return {"success": True, "data": {"scored": scored}}
+
+    def _mock_reason(self, c: dict, scene: str) -> str:
+        parts = []
+        if scene == "family" and c.get("child_friendly"):
+            parts.append("适合亲子")
+        q = c.get("queue_time_min", 0)
+        parts.append(f"排队{q}分钟" if q > 0 else "无需排队")
+        d = c.get("distance_km", 0)
+        parts.append(f"{d:.1f}km" if d > 0 else "")
+        return "，".join(p for p in parts if p)
+
+    async def _mock_itinerary_generate(self, payload: dict) -> dict:
+        """规则行程编排，不调 LLM"""
+        selected = payload.get("selected_nodes", {})
+        departure = payload.get("departure_time", "14:00")
+        scene = payload.get("scene", "family")
+        user_feedback = payload.get("user_feedback", "")
+        has_child = any(k in user_feedback for k in ("孩子", "小孩", "儿童", "宝宝"))
+        nodes = []
+        cur_h, cur_m = map(int, departure.split(":") if ":" in departure else ("14", "00"))
+        cur = cur_h * 60 + cur_m
+
+        def slot(dur: int) -> tuple[int, int, int]:
+            nonlocal cur
+            start = cur
+            end = cur + dur
+            cur = end + 15  # 缓冲 15min
+            return start, end, dur
+
+        def mk_node(src: dict, cat: str) -> dict:
+            s, e, d = slot(src.get("estimated_duration_min",
+                                   120 if cat == "main_activity" else 60))
+            n = {
+                "node_id": f"n_{len(nodes)+1}",
+                "poi_id": src.get("poi_id", ""),
+                "poi_name": src.get("name", ""),
+                "category": cat,
+                "start_time": f"{s//60:02d}:{s%60:02d}",
+                "end_time": f"{e//60:02d}:{e%60:02d}",
+                "duration_min": d,
+                "tags": src.get("tags", []),
+                "planner_reason": src.get("planner_reason", ""),
+                # 透传 SSE 适配器需要的字段
+                "address": src.get("address", ""),
+                "distance_km": src.get("distance_km", 0),
+                "rating": src.get("rating", 0),
+                "ticket_price": src.get("ticket_price", src.get("avg_price", 0)),
+                "avg_price": src.get("avg_price", 0),
+            }
+            return n
+
+        main = selected.get("main_activity", {})
+        if main.get("poi_id"):
+            nodes.append(mk_node(main, "main_activity"))
+
+        rest = selected.get("restaurant", {})
+        if rest.get("poi_id"):
+            nodes.append(mk_node(rest, "restaurant"))
+
+        opt = selected.get("optional_activity", {})
+        if opt.get("poi_id"):
+            nodes.append(mk_node(opt, "optional_activity"))
+
+        total = nodes[-1]["end_time"] if nodes else departure
+        return {"success": True, "data": {
+            "itinerary_id": "iti_mock",
+            "nodes": nodes,
+            "total_duration_min": max(0, sum(n["duration_min"] for n in nodes)),
+            "summary": " → ".join(n["poi_name"] for n in nodes[:3]) + f"，共{sum(n['duration_min'] for n in nodes)}分钟",
+        }}
+
+    async def _mock_itinerary_replan(self, payload: dict) -> dict:
+        """重规划 — 直接返回原方案（mock 模式不需要真重规划）"""
+        return {"success": True, "data": {
+            "replan_id": "rep_mock",
+            "need_user_confirm": False,
+            "nodes": [],
+            "updated_route_required": False,
+        }}
 
     def _subscribe_events(self):
         self.event_bus.subscribe("status_update", lambda ctx, e: sp(f"  . {e['data'].get('message','')}"))

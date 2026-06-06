@@ -1437,4 +1437,8 @@ class Orchestrator:
             "name": "商场轻松散步区",
             "category": "shopping",
             "estimated_duration_min": 40,
+            "address": "望京凯德Mall 2层",
+            "distance_km": 0.5,
+            "rating": 4.0,
+            "tags": ["室内", "散步", "休闲"],
         }

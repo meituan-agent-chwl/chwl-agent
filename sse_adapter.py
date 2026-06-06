@@ -25,7 +25,18 @@ EVENT_MAP = {
     "monitor_started":    "text",
 }
 
-# 节点类别 → 前端卡片图标的映射
+# 状态消息 → 前端 status card item id 的映射
+STATUS_ID_MAP = [
+    ("正在获取当前位置", 2, "loading"),
+    ("正在骑行",        2, "loading"),
+    ("已找到",          2, "done"),
+    ("已找到",          3, "loading"),
+    ("正在评分",        3, "loading"),
+    ("正在生成行程方案", 4, "loading"),
+    ("正在根据您的反馈", 4, "loading"),
+    ("调整失败",        4, "done"),
+    ("已保持原计划不变", 4, "done"),
+]
 CATEGORY_ICONS = {
     "main_activity":    "🎯",
     "indoor_playground":"🎯",
@@ -104,7 +115,19 @@ def create_sse_session(event_bus: EventBus, session_id: str):
         elif sse_type == "status":
             msg = data.get("message", "")
             if msg:
-                queue.put_nowait({"type": "status", "text": msg})
+                # 匹配 status card item id，让前端进度条能推进
+                matched_id = None
+                matched_status = None
+                for keyword, sid, st in STATUS_ID_MAP:
+                    if keyword in msg:
+                        matched_id = sid
+                        matched_status = st
+                        break
+                evt = {"type": "status", "text": msg}
+                if matched_id:
+                    evt["id"] = matched_id
+                    evt["status"] = matched_status
+                queue.put_nowait(evt)
             return
 
         elif sse_type == "error":
