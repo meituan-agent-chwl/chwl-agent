@@ -14,7 +14,7 @@ agent_instances: Dict[str, ChatAgent] = {}
 
 def get_or_create_agent(session_id: str) -> ChatAgent:
     if session_id not in agent_instances:
-        agent = ChatAgent(session_id=session_id, mock_llm=True)
+        agent = ChatAgent(session_id=session_id, mock_llm=False)
         agent_instances[session_id] = agent
     return agent_instances[session_id]
 
