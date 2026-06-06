@@ -12,7 +12,7 @@ import json
 
 from runtime.event_bus import EventBus
 
-# SSE 事件映射表
+# ── SSE 事件映射表 ───────────────────────────────────────────
 EVENT_MAP = {
     "plan_complete":      "itinerary_ready",
     "status_update":      "status",
@@ -24,6 +24,48 @@ EVENT_MAP = {
     "replan_applied":     "itinerary_updated",
     "monitor_started":    "text",
 }
+
+# 节点类别 → 前端卡片图标的映射
+CATEGORY_ICONS = {
+    "main_activity":    "🎯",
+    "indoor_playground":"🎯",
+    "museum":           "🏛️",
+    "exhibition":       "🎨",
+    "restaurant":       "🍽️",
+    "optional_activity":"🚶",
+    "outdoor_walk":     "🚶",
+    "shopping":         "🚶",
+    "park":             "🌳",
+    "entertainment":    "🎵",
+    "transport":        "🚕",
+    "rest":             "☕",
+}
+
+def _fmt_node(n: dict) -> dict:
+    """将后端的节点数据格式转为前端 ItineraryCards 组件期望的格式"""
+    category = n.get("category", "activity")
+    return {
+        "id": n.get("node_id", ""),
+        "poiId": n.get("poi_id", ""),
+        "name": n.get("poi_name", ""),
+        "type": category,
+        # NodeCard 读的是 timeStart / timeEnd（不是 startTime / endTime）
+        "timeStart": n.get("scheduled_start", "") or n.get("start_time", ""),
+        "timeEnd": n.get("scheduled_end", "") or n.get("end_time", ""),
+        "duration": n.get("duration_min", 60),
+        "status": n.get("status", "planned"),
+        "tags": n.get("tags", []),
+        # 补充字段让卡片正常渲染
+        "icon": CATEGORY_ICONS.get(category, "📍"),
+        "sub": n.get("address", ""),
+        "reason": n.get("planner_reason", ""),
+        "rating": n.get("rating", 0),
+        "distance": f'{n.get("distance_km", 0):.1f}km' if n.get("distance_km") else "",
+        "price": f'¥{n.get("ticket_price", n.get("avg_price", 0))}' if n.get("ticket_price", n.get("avg_price", 0)) else "",
+        "user_pinned": n.get("user_pinned", False),
+        "completed_lock": n.get("completed_lock", False),
+        "locked": n.get("completed_lock", False) or n.get("soft_lock", False),
+    }
 
 def create_sse_session(event_bus: EventBus, session_id: str):
     """
@@ -50,14 +92,7 @@ def create_sse_session(event_bus: EventBus, session_id: str):
         if sse_type == "itinerary_ready" and data.get("itinerary"):
             itin = data["itinerary"]
             nodes = itin.get("nodes", [])
-            fmt_nodes = [{
-                "id": n.get("node_id", ""), "poiId": n.get("poi_id", ""),
-                "name": n.get("poi_name", ""), "type": n.get("category", "activity"),
-                "startTime": n.get("scheduled_start", "") or n.get("start_time", ""),
-                "endTime": n.get("scheduled_end", "") or n.get("end_time", ""),
-                "duration": n.get("duration_min", 60), "status": n.get("status", "planned"),
-                "tags": n.get("tags", []),
-            } for n in nodes]
+            fmt_nodes = [_fmt_node(n) for n in nodes]
             queue.put_nowait({"type": "itinerary_ready", "nodes": fmt_nodes, "summary": itin.get("summary", "")})
             return
 
@@ -79,10 +114,7 @@ def create_sse_session(event_bus: EventBus, session_id: str):
         elif sse_type == "itinerary_updated":
             itin2 = data.get("itinerary", {})
             nodes2 = itin2.get("nodes", [])
-            fmt2 = [{"id":n.get("node_id",""),"poiId":n.get("poi_id",""),"name":n.get("poi_name",""),
-                "type":n.get("category","activity"),"startTime":n.get("scheduled_start","") or n.get("start_time",""),
-                "endTime":n.get("scheduled_end","") or n.get("end_time",""),"duration":n.get("duration_min",60),
-                "status":n.get("status","planned"),"tags":n.get("tags",[])} for n in nodes2]
+            fmt2 = [_fmt_node(n) for n in nodes2]
             queue.put_nowait({"type": "itinerary_updated", "nodes": fmt2})
             return
 

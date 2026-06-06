@@ -278,13 +278,15 @@ class ChatAgent:
         self._planning = True
         self._plan_id = None
 
+        # 保存当前 session_id 用于复用，保证 SSE 适配器过滤时能匹配
+        existing_sid = self.session_id or ""
         if self.session_id:
             try:
                 await self.orchestrator.cancel_session(self.session_id)
             except Exception:
                 pass
             await asyncio.sleep(0.3)
-        self.session_id = await self.orchestrator.start_session(user_input)
+        self.session_id = await self.orchestrator.start_session(user_input, session_id=existing_sid)
 
         # 等 Phase 1 完成
         for _ in range(40):
