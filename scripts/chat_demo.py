@@ -33,7 +33,7 @@ from runtime.event_bus import EventBus
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
 
-API_KEY = os.environ.get("DEEPSEEK_API_KEY", "sk-67937130fddf4be086e73e7b2f6d293c")
+API_KEY = os.environ.get("DEEPSEEK_API_KEY", "sk-cb68e293b6104ee386022a4a990c60d6")
 
 
 # ── Agent System Prompt ────────────────────────────────────
