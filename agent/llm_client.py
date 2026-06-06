@@ -1,6 +1,6 @@
 """
-LLM Client — 多模型支持（DeepSeek + Anthropic Claude）
-来自 V2 的多 Provider 架构
+LLM Client — 多 Provider 支持（DeepSeek / Anthropic Claude / LongCat）
+OpenAI 兼容格式 + Anthropic 原生格式
 """
 from __future__ import annotations
 import json, logging, os
@@ -9,53 +9,70 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
-DEEPSEEK_MODEL = "deepseek-chat"
-ANTHROPIC_API_KEY_ENV = "ANTHROPIC_API_KEY"
-DEEPSEEK_API_KEY_ENV = "DEEPSEEK_API_KEY"
+# Provider 环境变量
+ENV_PROVIDER     = "LLM_PROVIDER"          # longcat | deepseek | anthropic
+ENV_DEEPSEEK_KEY = "DEEPSEEK_API_KEY"
+ENV_ANTHROPIC_KEY= "ANTHROPIC_API_KEY"
+ENV_LONGCAT_KEY  = "LONGCAT_API_KEY"
+ENV_LONGCAT_URL  = "LONGCAT_BASE_URL"      # https://api.longcat.chat/openai
+ENV_LONGCAT_MODEL= "LONGCAT_MODEL"
+
+DEFAULT_LONGCAT_URL   = "https://api.longcat.chat/openai"
+DEFAULT_LONGCAT_MODEL = "longcat-chat"
 
 
 def _provider() -> str:
-    """返回可用 provider: deepseek / anthropic / none"""
-    if os.environ.get(DEEPSEEK_API_KEY_ENV):
+    """返回可用 provider: longcat / deepseek / anthropic / none"""
+    override = os.environ.get(ENV_PROVIDER, "").lower().strip()
+    if override:
+        if override == "longcat" and os.environ.get(ENV_LONGCAT_KEY):
+            return "longcat"
+        if override == "deepseek" and os.environ.get(ENV_DEEPSEEK_KEY):
+            return "deepseek"
+        if override == "anthropic" and os.environ.get(ENV_ANTHROPIC_KEY):
+            return "anthropic"
+    # 自动检测
+    if os.environ.get(ENV_LONGCAT_KEY):
+        return "longcat"
+    if os.environ.get(ENV_DEEPSEEK_KEY):
         return "deepseek"
-    if os.environ.get(ANTHROPIC_API_KEY_ENV):
+    if os.environ.get(ENV_ANTHROPIC_KEY):
         return "anthropic"
     return "none"
 
 
-def _has_api_key() -> bool:
-    return _provider() != "none"
-
-
 class LLMClient:
-    def __init__(self, api_key: str = "", base_url: str = DEEPSEEK_BASE_URL,
-                 model: str = DEEPSEEK_MODEL, timeout_s: int = 30):
-        self.api_key = api_key or os.environ.get(DEEPSEEK_API_KEY_ENV, "")
-        self.anthropic_key = os.environ.get(ANTHROPIC_API_KEY_ENV, "")
-        self.base_url = base_url.rstrip("/")
-        self.model = model
+    def __init__(self, api_key: str = "", base_url: str = "",
+                 model: str = "", timeout_s: int = 30):
+        self.provider_name = _provider()
+        # LongCat
+        self.longcat_key = os.environ.get(ENV_LONGCAT_KEY, api_key)
+        self.longcat_url = (os.environ.get(ENV_LONGCAT_URL, DEFAULT_LONGCAT_URL)).rstrip("/")
+        self.longcat_model = os.environ.get(ENV_LONGCAT_MODEL, DEFAULT_LONGCAT_MODEL)
+        # DeepSeek
+        self.deepseek_key = os.environ.get(ENV_DEEPSEEK_KEY, api_key)
+        self.deepseek_url = base_url or "https://api.deepseek.com/v1"
+        self.deepseek_model = model or "deepseek-chat"
+        # Anthropic
+        self.anthropic_key = os.environ.get(ENV_ANTHROPIC_KEY, "")
         self.timeout_s = timeout_s
-
-    @property
-    def provider(self) -> str:
-        if self.api_key:
-            return "deepseek"
-        if self.anthropic_key:
-            return "anthropic"
-        return "none"
 
     async def chat(self, system: str, messages: list[dict],
                    response_format: Optional[dict] = None,
                    temperature: float = 0.3, max_tokens: int = 4096) -> str:
-        if self.provider == "deepseek":
-            return await self._chat_deepseek(system, messages, response_format,
-                                              temperature, max_tokens)
-        elif self.provider == "anthropic":
+        if self.provider_name in ("longcat", "deepseek"):
+            return await self._chat_openai(
+                api_key=self.longcat_key if self.provider_name == "longcat" else self.deepseek_key,
+                base_url=self.longcat_url if self.provider_name == "longcat" else self.deepseek_url,
+                model=self.longcat_model if self.provider_name == "longcat" else self.deepseek_model,
+                system=system, messages=messages,
+                response_format=response_format,
+                temperature=temperature, max_tokens=max_tokens,
+            )
+        elif self.provider_name == "anthropic":
             return await self._chat_anthropic(system, messages, temperature, max_tokens)
         else:
-            logger.error("[LLM] 未配置任何 API Key")
-            raise ValueError("未配置 LLM API Key（需设置 DEEPSEEK_API_KEY 或 ANTHROPIC_API_KEY）")
+            raise ValueError("未配置 LLM API Key（需设置 LONGCAT_API_KEY / DEEPSEEK_API_KEY / ANTHROPIC_API_KEY）")
 
     async def chat_json(self, system: str, messages: list[dict],
                         temperature: float = 0.1) -> dict:
@@ -63,12 +80,10 @@ class LLMClient:
                                response_format={"type": "json_object"},
                                temperature=temperature)
         text = text.strip()
-        # 去除 markdown 代码块
         if text.startswith("```"):
             text = text.split("\n", 1)[-1]
             text = text.rsplit("```", 1)[0]
             text = text.strip()
-        # 容错补全 {}
         if not text.startswith("{"):
             start = text.find("{")
             end = text.rfind("}")
@@ -86,15 +101,16 @@ class LLMClient:
                 logger.error("[LLM] JSON 解析失败: %.100s", text)
                 return {"action": "chat", "response": "系统正忙，请重试"}
 
-    # ── DeepSeek ──
+    # ── OpenAI 兼容格式（LongCat / DeepSeek） ──
 
-    async def _chat_deepseek(self, system: str, messages: list[dict],
-                              response_format: Optional[dict] = None,
-                              temperature: float = 0.3,
-                              max_tokens: int = 4096) -> str:
-        headers = {"Authorization": f"Bearer {self.api_key}",
+    async def _chat_openai(self, api_key: str, base_url: str, model: str,
+                            system: str, messages: list[dict],
+                            response_format: Optional[dict] = None,
+                            temperature: float = 0.3,
+                            max_tokens: int = 4096) -> str:
+        headers = {"Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json"}
-        body = {"model": self.model,
+        body = {"model": model,
                 "messages": [{"role": "system", "content": system}, *messages],
                 "temperature": temperature, "max_tokens": max_tokens, "stream": False}
         if response_format:
@@ -102,20 +118,19 @@ class LLMClient:
         try:
             async with httpx.AsyncClient(timeout=self.timeout_s, trust_env=False) as client:
                 resp = await client.post(
-                    f"{self.base_url}/chat/completions",
+                    f"{base_url.rstrip('/')}/chat/completions",
                     headers=headers, json=body)
                 resp.raise_for_status()
                 data = resp.json()
                 return data["choices"][0]["message"]["content"].strip()
         except httpx.HTTPStatusError as e:
-            logger.error("[DeepSeek] HTTP %d: %s",
-                         e.response.status_code, e.response.text[:200])
+            logger.error("[OpenAI] HTTP %d: %s", e.response.status_code, e.response.text[:200])
             raise
         except httpx.TimeoutException:
-            logger.error("[DeepSeek] timeout %ds", self.timeout_s)
+            logger.error("[OpenAI] timeout %ds", self.timeout_s)
             raise
 
-    # ── Anthropic ──
+    # ── Anthropic Claude ──
 
     async def _chat_anthropic(self, system: str, messages: list[dict],
                                temperature: float = 0.3,
@@ -125,7 +140,6 @@ class LLMClient:
             "anthropic-version": "2023-06-01",
             "Content-Type": "application/json",
         }
-        # 转换消息格式
         claude_messages = []
         for m in messages:
             role = "user" if m.get("role") in ("user", "system") else "assistant"
@@ -146,8 +160,7 @@ class LLMClient:
                 data = resp.json()
                 return data["content"][0]["text"].strip()
         except httpx.HTTPStatusError as e:
-            logger.error("[Anthropic] HTTP %d: %s",
-                         e.response.status_code, e.response.text[:200])
+            logger.error("[Anthropic] HTTP %d: %s", e.response.status_code, e.response.text[:200])
             raise
         except httpx.TimeoutException:
             logger.error("[Anthropic] timeout %ds", self.timeout_s)
