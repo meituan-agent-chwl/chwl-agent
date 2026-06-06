@@ -452,6 +452,30 @@ class ChatAgent:
             reply = "好的，已取消。下次需要随时找我。"
             self.conversation_history.append({"role": "assistant", "content": reply})
             return reply
+        
+        # 在 mock 模式下用规则路由；在 LLM 模式下用 planner 的 clarify/confirm 流程
+        if not self.mock_llm and self.session_id and len(self.conversation_history) <= 3:
+            # 尝试 LLM 深度追问
+            try:
+                clarify_result = await self.planner.clarify_needs(
+                    user_input, current_time="14:00")
+                if clarify_result.get("success"):
+                    data = clarify_result["data"]
+                    inferred = data.get("inferred", {})
+                    questions = data.get("clarify_questions", [])
+                    msg = data.get("confirm_message", "")
+                    if questions:
+                        # 有追问 → 存 inferred 到 memory 并返回追问
+                        if hasattr(self.orchestrator, 'memory'):
+                            self.orchestrator.memory.put_batch(
+                                self.session_id, "session_facts", inferred,
+                                source="clarify", confidence=0.7)
+                        self.conversation_history.append(
+                            {"role": "assistant", "content": msg})
+                        return msg
+                    # 无追问 → 信息已完整，直接规划
+            except Exception:
+                pass
 
         # 首次输入 → 创建 session（不主动规划，等 LLM 决定 action）
         if not self.session_id:

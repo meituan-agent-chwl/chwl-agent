@@ -309,6 +309,69 @@ async def queue_advice(session_id: str):
 async def user_location():
     return {"lat": 39.998, "lng": 116.481, "address": "北京市朝阳区望京"}
 
+# ═══ V2 补充端点 ═══════════════════════════════════════════════
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "version": "3.0.0"}
+
+@app.post("/agent/{session_id}/plan")
+async def legacy_plan(session_id: str, request: Request):
+    """兼容 V2 的独立规划端点"""
+    body = await request.json()
+    message = body.get("message", "")
+    agent = get_or_create_agent(session_id)
+    # 复用 chat 逻辑
+    event_queue, cleanup = create_sse_session(agent.event_bus, session_id)
+    async def run():
+        try:
+            response = await agent.handle_message(message)
+            await event_queue.put({"type": "_text_response", "text": response})
+        except Exception as e:
+            await event_queue.put({"type": "_text_response", "text": f"出错: {e}"})
+        finally:
+            await event_queue.put({"type": "stream_end"})
+    asyncio.create_task(run())
+    return sse_response(event_queue, cleanup)
+
+@app.post("/agent/{session_id}/simulator/inject")
+async def simulator_inject(session_id: str, request: Request):
+    """V2 文本注入模拟事件"""
+    body = await request.json()
+    text = body.get("text", "")
+    try:
+        agent = get_or_create_agent(session_id)
+        # 使用 LLMPlanner 生成模拟事件
+        ctx = agent.orchestrator.sessions.get(session_id)
+        if ctx and ctx.itinerary:
+            context = {
+                "itinerary": [{"start_time": n.scheduled_start,
+                               "poi_name": n.poi_name} for n in ctx.itinerary.nodes],
+                "session_id": session_id,
+            }
+            events = await agent.planner.generate_simulator_event(context)
+            return events
+    except Exception as e:
+        logger.warning("[Simulator] inject 失败: %s", e)
+    return {"success": True, "data": [{"event_type": "info", "message": "已收到"}]}
+
+@app.post("/agent/{session_id}/sandbox/trigger")
+async def sandbox_trigger(session_id: str, event_type: str = "queue_spike"):
+    """V2 事件触发器"""
+    try:
+        agent = get_or_create_agent(session_id)
+        await agent.event_bus.emit("sandbox_event", None, {
+            "session_id": session_id,
+            "event_type": event_type,
+            "severity": "warning",
+            "message": f"沙箱触发事件: {event_type}",
+        })
+        return {"success": True, "event_type": event_type}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+# ═══════════════════════════════════════════════════════════════
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("api.app:app", host="0.0.0.0", port=8000, reload=True)
