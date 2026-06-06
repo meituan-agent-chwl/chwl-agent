@@ -1,225 +1,283 @@
 """
-独立 FastAPI 测试服务器
-
-供前端开发联调使用。
-暴露 REST 接口 + SSE 事件流。
-
-用法:
-    python scripts/test_server.py
-    # 访问 http://localhost:8000/docs 查看 Swagger 文档
+FastAPI Agent Backend — /agent/* for frontend, /api/* for backward compatibility
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-import sys
 import uuid
 
-sys.path.insert(0, "..")
-
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from tools.registry import ToolRegistry
 from mocks import MockBackend
 from agent.loop import Orchestrator, _d
+from runtime.event_bus import EventBus
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Meituan Agent - Test Server", version="0.1.0")
+app = FastAPI(title="CHWL Agent Backend", version="2.0.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
+                   allow_methods=["*"], allow_headers=["*"])
 
-# ─── 全局依赖 ────────────────────────────────────────────────
+# ─── Dependencies ──────────────────────────────────────────
 
 backend = MockBackend()
 tools = ToolRegistry()
-
-# 注册所有 mock handler
 for name in ["location", "user_context", "weather", "activities_search",
              "restaurants_search", "route_check", "candidates_score",
              "itinerary_generate", "booking_execute", "booking_status",
              "itinerary_replan"]:
-    handler = getattr(backend, f"handle_{name}")
-    tools.register_mock(name, handler)
+    tools.register_mock(name, getattr(backend, f"handle_{name}"))
 
 orchestrator = Orchestrator(tools)
+sessions: dict[str, dict] = {}
 
-# SSE 订阅者
-sse_queues: dict[str, asyncio.Queue] = {}
+# ─── Helpers ───────────────────────────────────────────────
 
+def get_session(session_id: str):
+    if session_id not in sessions:
+        sessions[session_id] = {"memory": {"session_facts": {}, "confirmed_preferences": {}, "derived_preferences": {}}}
+    return sessions[session_id]
 
-# ─── Request/Response Models ─────────────────────────────────
+def sse_response(gen):
+    async def stream():
+        async for event in gen:
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        yield "data: {\"type\":\"stream_end\"}\n\n"
+    return StreamingResponse(stream(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
 
-class StartPlanRequest(BaseModel):
-    user_input: str
-    session_id: str = ""
+# ─── Health ────────────────────────────────────────────────
 
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "chwl-agent", "version": "2.0.0"}
 
-class ModifyRequest(BaseModel):
-    type: str = ""         # replace | delete | insert
-    node_id: str = ""
-    target_node_id: str = ""
-    new_resource: dict = {}
+# ─── Session ───────────────────────────────────────────────
 
+@app.post("/agent/session")
+async def create_session():
+    sid = f"sess_{uuid.uuid4().hex[:8]}"
+    sessions[sid] = {"memory": {"session_facts": {}, "confirmed_preferences": {}, "derived_preferences": {}}}
+    return {"session_id": sid}
 
-class SentimentRequest(BaseModel):
-    type: str = ""
-    description: str = ""
-    node_id: str = ""
+@app.delete("/agent/{session_id}/reset")
+async def reset_session(session_id: str):
+    sessions.pop(session_id, None)
+    try:
+        await orchestrator.cancel_session(session_id)
+    except Exception:
+        pass
+    return {"status": "reset", "session_id": session_id}
 
+# ─── Chat SSE (primary entry) ──────────────────────────────
 
-class ConfirmRequest(BaseModel):
-    request_id: str
-    approved: bool
-    modifications: dict = {}
+@app.post("/agent/{session_id}/chat")
+async def chat(session_id: str, request: Request):
+    body = await request.json()
+    message = body.get("message", "")
+    phase_hint = body.get("phase_hint", "")
 
+    async def event_stream():
+        # Map frontend phase hints to Orchestrator actions
+        if phase_hint == "start_plan" or not session_id:
+            sid = await orchestrator.start_session(message)
+            yield {"type": "status", "message": "正在为您搜索活动..."}
+            # Wait for Phase 1
+            for _ in range(30):
+                await asyncio.sleep(1)
+                s = await orchestrator.get_status(sid)
+                if s.itinerary_state == "pending_confirm":
+                    yield {"type": "plan_complete", "itinerary": _d(s)}
+                    yield {"type": "phase_change", "phase": "confirming"}
+                    break
+        else:
+            # Handle other phases
+            s = await orchestrator.get_status(session_id)
+            if s.itinerary_state == "pending_confirm":
+                yield {"type": "plan_complete", "itinerary": _d(s)}
 
-# ─── SSE 事件流 ──────────────────────────────────────────────
+    return sse_response(event_stream())
 
-@app.on_event("startup")
-async def startup():
-    # 订阅所有事件，推送到 SSE 队列
-    @orchestrator.event_bus.subscribe("*")
-    async def push_to_sse(ctx, event):
-        # 找到所有匹配的 SSE 队列
-        session_id = event.get("session_id", "")
-        if session_id in sse_queues:
-            await sse_queues[session_id].put(event)
+# ─── Plan (SSE) ────────────────────────────────────────────
 
+@app.post("/agent/{session_id}/plan")
+async def plan(session_id: str, request: Request):
+    body = await request.json()
+    user_input = body.get("user_input", body.get("message", ""))
 
-@app.get("/api/events/{session_id}")
-async def event_stream(session_id: str):
-    """SSE 事件流"""
-    if session_id not in sse_queues:
-        sse_queues[session_id] = asyncio.Queue()
+    async def event_stream():
+        sid = await orchestrator.start_session(user_input)
+        yield {"type": "status", "message": "正在搜索活动..."}
+        for _ in range(30):
+            await asyncio.sleep(1)
+            s = await orchestrator.get_status(sid)
+            if s.itinerary_state == "pending_confirm":
+                yield {"type": "plan_complete", "itinerary": _d(s), "session_id": sid}
+                break
 
-    queue = sse_queues[session_id]
+    return sse_response(event_stream())
 
-    async def generate():
+# ─── Fulfill (SSE) ─────────────────────────────────────────
+
+@app.post("/agent/{session_id}/fulfill")
+async def fulfill(session_id: str):
+    async def event_stream():
         try:
-            while True:
-                event = await queue.get()
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-        except asyncio.CancelledError:
-            pass
-        finally:
-            if session_id in sse_queues:
-                del sse_queues[session_id]
+            await orchestrator.confirm_itinerary(session_id)
+            yield {"type": "fulfillment_started"}
+            for _ in range(20):
+                await asyncio.sleep(1.5)
+                s = await orchestrator.get_status(session_id)
+                if s.itinerary_state in ("completed", "needs_replan"):
+                    yield {"type": "fulfillment_complete", "itinerary": _d(s)}
+                    break
+        except Exception as e:
+            yield {"type": "error", "message": str(e)}
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return sse_response(event_stream())
 
+# ─── Confirmation ──────────────────────────────────────────
 
-# ─── REST 接口 ──────────────────────────────────────────────
-
-
-@app.post("/api/orchestrator/plan")
-async def start_plan(req: StartPlanRequest):
-    """开始规划"""
-    try:
-        session_id = await orchestrator.start_session(
-            req.user_input, req.session_id or ""
-        )
-        return {"session_id": session_id, "status": "planning"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/orchestrator/session/{session_id}")
-async def get_session(session_id: str):
-    """查询会话状态"""
-    try:
-        status = await orchestrator.get_status(session_id)
-        return _d(status)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/orchestrator/confirm/{session_id}")
-async def confirm(session_id: str):
-    """确认行程，一键安排"""
-    try:
-        result = await orchestrator.confirm_itinerary(session_id)
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/orchestrator/modify/{session_id}")
-async def modify(session_id: str, req: ModifyRequest):
-    """修改行程"""
-    from schemas.models import ItineraryModification
-    try:
-        mod = ItineraryModification(
-            type=req.type,
-            node_id=req.node_id,
-            target_node_id=req.target_node_id,
-            new_resource=req.new_resource,
-        )
-        itinerary = await orchestrator.modify_itinerary(session_id, mod)
-        return _d(itinerary)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/orchestrator/sentiment/{session_id}")
-async def report_sentiment(session_id: str, req: SentimentRequest):
-    """上报情绪/异常"""
-    from schemas.models import UserSentiment
-    try:
-        sentiment = UserSentiment(
-            type=req.type,
-            description=req.description,
-            node_id=req.node_id,
-        )
-        result = await orchestrator.handle_user_sentiment(session_id, sentiment)
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/orchestrator/resolve")
-async def resolve(req: ConfirmRequest):
-    """响应用户确认"""
+@app.post("/agent/{session_id}/confirmation/resolve")
+async def resolve_confirmation(session_id: str, request: Request):
+    body = await request.json()
     try:
         result = await orchestrator.resolve_confirmation(
-            req.request_id, req.approved, req.modifications
+            body.get("request_id", ""), body.get("approved", False), body.get("modifications", {})
         )
-        return {"success": result}
+        return {"resolved": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"resolved": False, "error": str(e)}
 
+@app.post("/agent/{session_id}/exception/confirm")
+async def exception_confirm(session_id: str, request: Request):
+    body = await request.json()
+    async def event_stream():
+        try:
+            await orchestrator.resolve_confirmation(
+                body.get("request_id", ""), body.get("approved", False), body.get("modifications", {})
+            )
+            yield {"type": "exception_resolved"}
+        except Exception as e:
+            yield {"type": "error", "message": str(e)}
+    return sse_response(event_stream())
+
+# ─── Itinerary read ────────────────────────────────────────
+
+@app.get("/agent/{session_id}/itinerary")
+async def get_itinerary(session_id: str):
+    try:
+        s = await orchestrator.get_status(session_id)
+        return {"nodes": s.nodes}
+    except Exception:
+        return {"nodes": []}
+
+# ─── Memory ────────────────────────────────────────────────
+
+@app.get("/agent/{session_id}/memory")
+async def get_memory(session_id: str):
+    sess = get_session(session_id)
+    return sess["memory"]
+
+@app.post("/agent/{session_id}/memory")
+async def update_memory(session_id: str, request: Request):
+    body = await request.json()
+    sess = get_session(session_id)
+    scope = body.get("scope", "session_facts")
+    updates = body.get("updates", {})
+    if scope in sess["memory"]:
+        sess["memory"][scope].update(updates)
+    return {"status": "updated", "memory": sess["memory"]}
+
+# ─── Node action ───────────────────────────────────────────
+
+@app.post("/agent/{session_id}/node/action")
+async def node_action(session_id: str, request: Request):
+    body = await request.json()
+    # Simplified: just return current nodes (full editing requires confirmation gateway)
+    try:
+        s = await orchestrator.get_status(session_id)
+        return {"nodes": s.nodes}
+    except Exception:
+        return {"nodes": []}
+
+@app.post("/agent/{session_id}/node/checkin")
+async def node_checkin(session_id: str, request: Request):
+    return {"status": "checked_in"}
+
+# ─── Monitor ───────────────────────────────────────────────
+
+@app.get("/agent/{session_id}/monitor/state")
+async def monitor_state(session_id: str):
+    try:
+        s = await orchestrator.get_status(session_id)
+        return {"phase": s.itinerary_state, "itinerary": s.nodes, "progress_pct": s.progress_pct}
+    except Exception:
+        return {"phase": "none", "itinerary": [], "progress_pct": 0}
+
+# ─── MISC ──────────────────────────────────────────────────
+
+@app.post("/agent/{session_id}/report")
+async def report_issue(session_id: str, request: Request):
+    return {"status": "reported"}
+
+@app.post("/agent/{session_id}/simulator/advance")
+async def simulator_advance(session_id: str):
+    return {"status": "advanced"}
+
+@app.post("/agent/{session_id}/taxi/dispatch")
+async def taxi_dispatch(session_id: str):
+    return {"status": "dispatched", "eta_min": 8}
+
+@app.get("/agent/{session_id}/route/estimate")
+async def route_estimate(session_id: str, request: Request):
+    params = dict(request.query_params)
+    result = await backend.handle("route_check", {
+        "origin": params.get("from", ""), "destinations": [params.get("to", "")]
+    })
+    return result.get("data", {})
+
+@app.get("/agent/{session_id}/queue-advice")
+async def queue_advice(session_id: str):
+    return {"advices": []}
+
+@app.get("/api/location/current")
+async def user_location():
+    return {"lat": 39.998, "lng": 116.481, "address": "北京市朝阳区望京"}
+
+# ─── Legacy /api/* endpoints (keep for backward compat) ───
+
+@app.get("/api/events/{session_id}")
+async def sse_events(session_id: str):
+    return {"status": "ok"}
+
+@app.post("/api/orchestrator/plan")
+async def legacy_plan(request: Request):
+    body = await request.json()
+    sid = await orchestrator.start_session(body.get("user_input", ""))
+    return {"session_id": sid, "status": "planning"}
+
+@app.get("/api/orchestrator/session/{session_id}")
+async def legacy_session(session_id: str):
+    return _d(await orchestrator.get_status(session_id))
+
+@app.post("/api/orchestrator/confirm/{session_id}")
+async def legacy_confirm(session_id: str):
+    return await orchestrator.confirm_itinerary(session_id)
 
 @app.post("/api/orchestrator/cancel/{session_id}")
-async def cancel(session_id: str):
-    """取消会话"""
-    try:
-        result = await orchestrator.cancel_session(session_id)
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+async def legacy_cancel(session_id: str):
+    return await orchestrator.cancel_session(session_id)
 
-
-# ─── Mock API 透传 ──────────────────────────────────────────
-
-@app.get("/api/mock/{tool_name}")
-@app.post("/api/mock/{tool_name}")
-async def mock_api(tool_name: str, payload: dict = {}):
-    """透传调用 mock backend（调试用）"""
-    result = await backend.handle(tool_name, payload)
-    return result
-
+# ─── Entry ─────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run("api.app:app", host="0.0.0.0", port=8000, reload=True)
