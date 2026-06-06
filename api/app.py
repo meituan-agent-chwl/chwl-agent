@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -20,6 +21,8 @@ from pydantic import BaseModel
 from tools.registry import ToolRegistry
 from mocks import MockBackend
 from agent.loop import Orchestrator, _d
+from agent.llm_client import LLMClient
+from planner.llm_planner import LLMPlanner
 from runtime.event_bus import EventBus
 
 logging.basicConfig(level=logging.INFO)
@@ -33,10 +36,25 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
 
 backend = MockBackend()
 tools = ToolRegistry()
+
+# LLM 推理 handler（优先使用，失败时降级到 mock）
+api_key = os.environ.get("DEEPSEEK_API_KEY", "sk-67937130fddf4be086e73e7b2f6d293c")
+try:
+    llm = LLMClient(api_key=api_key)
+    planner = LLMPlanner(llm)
+    tools.register_mock("candidates_score", planner.handle_candidates_score)
+    tools.register_mock("itinerary_generate", planner.handle_itinerary_generate)
+    tools.register_mock("itinerary_replan", planner.handle_itinerary_replan)
+    logger.info("LLM Planner registered")
+except Exception as e:
+    logger.warning("LLM planner init failed, fallback to mock: %s", e)
+    tools.register_mock("candidates_score", backend.handle_candidates_score)
+    tools.register_mock("itinerary_generate", backend.handle_itinerary_generate)
+    tools.register_mock("itinerary_replan", backend.handle_itinerary_replan)
+
+# Mock handler（事实数据）
 for name in ["location", "user_context", "weather", "activities_search",
-             "restaurants_search", "route_check", "candidates_score",
-             "itinerary_generate", "booking_execute", "booking_status",
-             "itinerary_replan"]:
+             "restaurants_search", "route_check", "booking_execute", "booking_status"]:
     tools.register_mock(name, getattr(backend, f"handle_{name}"))
 
 orchestrator = Orchestrator(tools)
@@ -93,7 +111,7 @@ async def chat(session_id: str, request: Request):
         if phase_hint == "start_plan" or not session_id:
             sid = await orchestrator.start_session(message)
             yield {"type": "status", "message": "正在为您搜索活动..."}
-            # Wait for Phase 1
+            # Wait for Phase 1 with timeout
             for _ in range(30):
                 await asyncio.sleep(1)
                 s = await orchestrator.get_status(sid)
@@ -101,8 +119,9 @@ async def chat(session_id: str, request: Request):
                     yield {"type": "plan_complete", "itinerary": _d(s)}
                     yield {"type": "phase_change", "phase": "confirming"}
                     break
+            else:
+                yield {"type": "error", "message": "规划超时，请重试"}
         else:
-            # Handle other phases
             s = await orchestrator.get_status(session_id)
             if s.itinerary_state == "pending_confirm":
                 yield {"type": "plan_complete", "itinerary": _d(s)}
