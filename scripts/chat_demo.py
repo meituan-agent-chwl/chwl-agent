@@ -381,6 +381,7 @@ class ChatAgent:
 
     def _mock_route_action(self, user_input: str, state: str) -> tuple[str, str]:
         """纯规则意图路由，替代 LLM 的 chat_json 调用"""
+        import re
         inp = user_input.strip()
         has_plan = state in ("pending_confirm", "executing", "completed")
         # replan
@@ -397,12 +398,17 @@ class ChatAgent:
             return "cancel", "好的，已取消"
         # 新对话或 draft → 检查信息完整性
         if state in ("none", "unknown", "draft", "init", ""):
-            has_time = any(k in inp for k in ("点", ":", "下午", "上午", "中午", "晚上"))
+            # 具体时间：必须数字+点（"2点""14:00"），光"下午"不算
+            has_specific_time = bool(re.search(r'\d+[:：点]', inp))
             has_people = any(k in inp for k in ("人", "朋友", "孩子", "老婆", "老公", "一起", "和"))
-            if not has_time:
-                return "clarify", "请问您打算几点出发呢？"
+            missing = []
+            if not has_specific_time:
+                missing.append("具体出发时间")
             if not has_people:
-                return "clarify", "请问几个人去？"
+                missing.append("几个人去")
+            if missing:
+                ask = "、".join(missing)
+                return "clarify", f"请告诉我{ask}，我来帮你安排"
             return "plan", "好的，开始搜索方案"
         return "chat", "您说什么？"
 
