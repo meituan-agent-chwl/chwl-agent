@@ -119,7 +119,7 @@ class LLMClient:
         if response_format:
             body["response_format"] = response_format
         try:
-            async with httpx.AsyncClient(timeout=self.timeout_s, trust_env=False) as client:
+            async with httpx.AsyncClient(timeout=self.timeout_s, trust_env=True) as client:
                 resp = await client.post(
                     f"{base_url.rstrip('/')}/chat/completions",
                     headers=headers, json=body)
@@ -155,7 +155,7 @@ class LLMClient:
             "temperature": temperature,
         }
         try:
-            async with httpx.AsyncClient(timeout=self.timeout_s, trust_env=False) as client:
+            async with httpx.AsyncClient(timeout=self.timeout_s, trust_env=True) as client:
                 resp = await client.post(
                     "https://api.anthropic.com/v1/messages",
                     headers=headers, json=body)
