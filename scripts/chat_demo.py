@@ -469,12 +469,12 @@ class ChatAgent:
             known_info = ""
             if len(self.conversation_history) > 2:
                 known_info = self.conversation_history[-2].get("content", "")[:60]
-            prompt = AGENT_PROMPT.format(
-                state=state,
-                plan_summary=ctx_data.get("plan", "无"),
-                user_context=known_info or "无",
-            )
             try:
+                prompt = AGENT_PROMPT.format(
+                    state=state,
+                    plan_summary=ctx_data.get("plan", "无"),
+                    user_context=known_info or "无",
+                )
                 result = await self.llm.chat_json(
                     system=prompt,
                     messages=self.conversation_history[-8:],
