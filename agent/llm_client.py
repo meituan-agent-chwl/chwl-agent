@@ -105,7 +105,7 @@ class LLMClient:
                 return json.loads(fixed)
             except json.JSONDecodeError:
                 logger.error("[LLM] JSON 解析失败: %.100s", text)
-                return {"action": "chat", "response": "系统正忙，请重试"}
+                return {"action": "chat", "response": f"[JSON解析失败] {text[:80]}"}
 
     # ── OpenAI 兼容格式（LongCat / DeepSeek） ──
 

@@ -519,8 +519,8 @@ class ChatAgent:
                     messages=self.conversation_history[-8:],
                     temperature=0.2,
                 )
-            except Exception:
-                return "我没理解，您能再说一遍吗？"
+            except Exception as e:
+                return f"[LLM 错误] {e}"
             action = result.get("action", "chat")
             response = result.get("response", "您说")
 
